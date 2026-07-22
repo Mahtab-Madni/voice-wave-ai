@@ -19,7 +19,10 @@ const __dirname = dirname(__filename);
 const app = express();
 app.use(
   cors({
-    origin: "https://voice-wave-xi.vercel.app",
+    origin: [
+      process.env.FRONTEND_URL || "http://localhost:5173",
+      "https://voice-wave-xi.vercel.app",
+    ],
   }),
 );
 app.use((req, res, next) => {
