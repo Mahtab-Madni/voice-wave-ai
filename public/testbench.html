@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DOM Parser Testbench</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 2rem;
+      }
+      .card {
+        border: 1px solid #ddd;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+      }
+      button,
+      a,
+      input {
+        margin: 0.5rem 0;
+        display: inline-block;
+      }
+      pre {
+        background: #111;
+        color: #eee;
+        padding: 1rem;
+        border-radius: 8px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="btn-1">Submit Form</button>
+    <a href="#" id="link-1">Read our privacy policy</a>
+
+    <!-- Non-standard interactive element (Common real-world issue) -->
+    <div role="button" id="div-btn" onclick="alert('clicked')">
+      Click Me Instead
+    </div>
+
+    <!-- Hidden elements (Should be IGNORED) -->
+    <button id="btn-hidden" style="display: none">Invisible Button</button>
+    <div aria-hidden="true">
+      <button id="btn-aria-hidden">Ignored Button</button>
+    </div>
+
+    <!-- Identical text elements (Testing spatial differentiation) -->
+    <div class="card-1">
+      <h3>Iphone</h3>
+      <button
+        class="buy-btn"
+        onclick="
+          document.getElementById('iphone-output').textContent =
+            'Iphone added to cart'
+        "
+      >
+        Add to Cart
+      </button>
+    </div>
+    <div class="card-2">
+      <h3>Laptop</h3>
+      <button
+        class="buy-btn"
+        onclick="
+          document.getElementById('laptop-output').textContent =
+            'Laptop added to cart'
+        "
+      >
+        Add to Cart
+      </button>
+    </div>
+    <button onclick="window.runParser()">Run parser</button>
+    <button
+      id="demo-click-btn"
+      onclick="
+        window.demoClickCount = (window.demoClickCount || 0) + 1;
+        document.getElementById('demo-click-output').textContent =
+          'clicked ' + window.demoClickCount;
+      "
+    >
+      Demo Button
+    </button>
+    <div id="demo-click-output">not clicked</div>
+    <div id="iphone-output">Iphone not added to cart</div>
+    <div id="laptop-output">Laptop not added to cart</div>
+    <pre id="output">Waiting...</pre>
+
+    <script src="/DOMHandler.js"></script>
+    <script src="/DOMParser.js"></script>
+    <script src="/widget.js"></script>
+    <script>
+      window.runParser = function () {
+        const domHandler = new window.AccessibilityDOMHandler({
+          maxElements: 20,
+        });
+        const parser = new window.AccessibilityDOMParser({
+          maxElements: 20,
+          handler: domHandler,
+        });
+        const context = parser.collectContext();
+        document.getElementById("output").textContent = JSON.stringify(
+          context,
+          null,
+          2,
+        );
+      };
+      window.runParser();
+    </script>
+  </body>
+</html>

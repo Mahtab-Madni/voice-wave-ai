@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice Accessibility Widget</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #07111d 0%, #0f1b2f 100%);
+        color: #f5f7ff;
+      }
+      main {
+        width: min(680px, calc(100vw - 2rem));
+        padding: 2rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 1.25rem;
+        background: rgba(6, 14, 30, 0.84);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      }
+      code {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 0.2rem 0.45rem;
+        border-radius: 0.35rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Voice Accessibility Widget</h1>
+      <p>
+        The injected script below captures mic input, streams it to the local
+        Node backend, and forwards live transcriptions.
+      </p>
+      <p>Load this page locally and allow microphone access when prompted.</p>
+      <p>Example snippet:</p>
+      <code
+        >&lt;script src="http://localhost:3000/widget.js"
+        data-project-id="demo-project" async&gt;&lt;/script&gt;</code
+      >
+    </main>
+    <script src="/DOMHandler.js"></script>
+    <script src="/DOMParser.js"></script>
+    <script src="/widget.js"></script>
+  </body>
+</html>
