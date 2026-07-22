@@ -55,7 +55,7 @@ export const incrementViews = async (_req, res) => {
     const updatedView = await View.findOneAndUpdate(
       { _id: "global_counter" },
       { $inc: { count: 1 } },
-      { new: true, upsert: true, setDefaultsOnInsert: true },
+      { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
     );
 
     return res.json({ totalViews: updatedView?.count ?? 0 });
