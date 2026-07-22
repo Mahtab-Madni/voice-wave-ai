@@ -14,12 +14,7 @@ function normalizeApiKeys(apiKeys) {
   return [];
 }
 
-/**
- * Creates a function that returns the next API key in a round-robin cycle.
- *
- * @param {string[]|string} apiKeys - Array of API keys or a comma-separated string
- * @returns {function(): string} Function that returns the next API key in sequence
- */
+// Creates a simple key rotator function that returns the next API key in a round-robin fashion.
 function createKeyRotator(apiKeys) {
   const normalizedKeys = normalizeApiKeys(apiKeys);
   if (normalizedKeys.length === 0) {
@@ -35,15 +30,7 @@ function createKeyRotator(apiKeys) {
   };
 }
 
-/**
- * Creates a custom fetch wrapper that automatically attaches a rotated API key to request headers.
- *
- * @param {string[]|string} apiKeys - Array of API keys or a comma-separated string
- * @param {Object} [config] - Configuration options
- * @param {string} [config.headerName='Authorization'] - The HTTP header key for the API key
- * @param {function(string): string} [config.formatter] - Optional function to format the key (e.g., Bearer token)
- * @returns {function(string, Object=): Promise<Response>} Custom fetch function
- */
+// Creates a fetch wrapper that automatically rotates through API keys for each request.
 function createRotatedFetch(apiKeys, config = {}) {
   const normalizedKeys = normalizeApiKeys(apiKeys);
   if (normalizedKeys.length === 0) {
@@ -71,12 +58,7 @@ function createRotatedFetch(apiKeys, config = {}) {
   };
 }
 
-/**
- * ES6 Generator function that endlessly yields API keys in a round-robin sequence.
- *
- * @param {string[]|string} apiKeys - Array of API keys or a comma-separated string
- * @yields {string} The next API key
- */
+// Generator function that yields API keys in a round-robin fashion.
 function* apiKeyGenerator(apiKeys) {
   const normalizedKeys = normalizeApiKeys(apiKeys);
   if (normalizedKeys.length === 0) {
@@ -90,13 +72,9 @@ function* apiKeyGenerator(apiKeys) {
   }
 }
 
-/**
- * Class implementation for managing rotated API keys with status/logging support.
- */
+// A class that manages API keys and provides methods to get the next key, peek at the current key, and check the total number of keys.
 class KeyRotatorManager {
-  /**
-   * @param {string[]|string} apiKeys - Array of API keys or a comma-separated string
-   */
+  // Initializes the key rotator manager with a list of API keys.
   constructor(apiKeys) {
     const normalizedKeys = normalizeApiKeys(apiKeys);
     if (normalizedKeys.length === 0) {
@@ -106,28 +84,19 @@ class KeyRotatorManager {
     this.currentIndex = 0;
   }
 
-  /**
-   * Returns the next API key and advances the pointer.
-   * @returns {string}
-   */
+  // Returns the next API key in a round-robin fashion and advances the cycle.
   getKey() {
     const key = this.apiKeys[this.currentIndex];
     this.currentIndex = (this.currentIndex + 1) % this.apiKeys.length;
     return key;
   }
 
-  /**
-   * Peek at the active key without advancing the cycle.
-   * @returns {string}
-   */
+  // Returns the current API key without advancing the cycle.
   peekKey() {
     return this.apiKeys[this.currentIndex];
   }
 
-  /**
-   * Total number of keys currently configured.
-   * @returns {number}
-   */
+  // Returns the total number of API keys managed by this instance.
   get size() {
     return this.apiKeys.length;
   }
