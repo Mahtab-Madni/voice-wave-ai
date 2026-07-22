@@ -54,6 +54,10 @@ npm run dev
 
 The React dashboard lives in the website folder and is used to configure the project, describe the site, and generate an embed snippet.
 
+Note: the website subfolder is maintained in a separate repository: https://github.com/Mahtab-Madni/Voice-wave
+
+Live deployed site: https://voice-wave-xi.vercel.app/
+
 ```bash
 cd website
 npm install
