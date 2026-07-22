@@ -54,7 +54,7 @@ npm run dev
 
 The React dashboard lives in the website folder and is used to configure the project, describe the site, and generate an embed snippet.
 
-Note: the website subfolder is maintained in a separate repository: https://github.com/Mahtab-Madni/Voice-wave
+Note: the website subfolder is maintained in a separate private repository
 
 Live deployed site: https://voice-wave-xi.vercel.app/
 
@@ -141,7 +141,7 @@ Browser widget (mic + DOM context)
 Deepgram speech-to-text transcription
    │
    ▼
-Intent planner (Groq + page/project context + session conversation memory)
+Intent planner (LLM + page/project context + session conversation memory)
    │
    ├─> Browser action execution (17 actions)
    │
@@ -262,8 +262,6 @@ The repository is organized into three main areas:
 - public/
   - browser-side widget and DOM context extraction
   - injected script that records the command and executes actions
-- website/
-  - React dashboard for project setup and embed generation
 
 ## Main components
 
