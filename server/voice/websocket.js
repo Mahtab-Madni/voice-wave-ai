@@ -214,6 +214,8 @@ export function setupVoiceWebSocket(server, config = {}) {
               const project = await Project.findById(payload.projectId).lean();
               if (project) {
                 projectConfig = {
+                  projectName: project.name || "",
+                  websiteUrl: project.websiteUrl || "",
                   websiteDescription: project.websiteDescription || "",
                   siteCategory: project.siteCategory || "",
                   primaryLanguage: project.primaryLanguage || "",

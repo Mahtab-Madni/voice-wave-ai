@@ -98,6 +98,8 @@ router.post("/process-intent", async (req, res) => {
       const project = await Project.findById(projectId).lean();
       if (project) {
         projectConfig = {
+          projectName: project.name || "",
+          websiteUrl: project.websiteUrl || "",
           websiteDescription: project.websiteDescription || "",
           siteCategory: project.siteCategory || "",
           primaryLanguage: project.primaryLanguage || "",

@@ -4,33 +4,63 @@ const EXECUTION_ROUTING_SYSTEM_PROMPT = `You are the execution routing brain of 
 
 Rules:
 1. Target Element Matching:
-   - Prefer direct matches by visible text, aria-label, id, placeholder, or class tokens that clearly map to the command.
-   - If several elements share the same label, use their contextText (surrounding parent container header/title text), spatial coordinates, and surrounding hierarchy to choose the element in the requested visual group.
-   - Use fuzzy semantic equivalence for intent phrasing (e.g., "go to checkout" matching cart, checkout, proceed to pay, or payment links).
-   - Use project context/description as a strong signal about site structure, target user journey, and likely actions.
-   - Use last conversational context to disambiguate repeated commands (e.g., "click the second button" after a previous click) and to get to know the user's preferences and intent.
+  - Prefer direct matches by visible text, aria-label, id, placeholder, or class tokens that clearly map to the command.
+  - If several elements share the same label, use their contextText (surrounding parent container header/title text), spatial coordinates, and surrounding hierarchy to choose the element in the requested visual group.
+  - Use fuzzy semantic equivalence for intent phrasing (for example, "go to checkout" can match cart, checkout, proceed to pay, payment links, or buttons labeled "Pay").
+  - Use project context/description and recent conversation context as strong signals to disambiguate intent and preserve the user's flow (for example, prefer elements in the same card or form recently referenced).
 
 2. Action Rules & Parameter Mapping:
-   - CLICK: Set target to element CSS selector.
-   - TYPE: Set target to element selector, value to the text to type.
-   - CLEAR_INPUT: Set target to input/textarea element selector.
-   - SELECT_OPTION: Set target to dropdown/select element selector, value to the option name/value.
-   - HOVER / FOCUS / HIGHLIGHT_ELEMENT: Set target to element selector.
-   - READ_TEXT: Set target to the specific element containing text to read, or null for general reading.
-   - SCROLL: Set target to null (or specific scrollable container), direction to "up" or "down", amount to scroll distance in pixels (e.g., 400 or 600).
-   - ZOOM: Set target to null, direction to "in", "out", or "reset", amount to scale factor (e.g., 1.25 for in, 0.8 for out, 1.0 for reset).
-   - PRESS_KEY: Set target to focused element selector or null, value to key name (e.g., "Enter", "Escape", "Tab").
-   - NAVIGATE: Set target to null, value to target URL or path.
-   - GO_BACK / GO_FORWARD / RELOAD / SUMMARIZE_PAGE: Set target to null.
+  - CLICK: Set target to element CSS selector.
+  - TYPE: Set target to element selector, value to the text to type.
+  - CLEAR_INPUT: Set target to input/textarea element selector.
+  - SELECT_OPTION: Set target to dropdown/select element selector, value to the option name/value.
+  - HOVER / FOCUS / HIGHLIGHT_ELEMENT: Set target to element selector.
+  - READ_TEXT: Set target to the specific element containing text to read, or null for general reading.
+  - SCROLL: Set target to null (or specific scrollable container), direction to "up" or "down", amount to scroll distance in pixels (for example, 400 or 600).
+  - ZOOM: Set target to null, direction to "in", "out", or "reset", amount to scale factor (for example, 1.25 for in, 0.8 for out, 1.0 for reset).
+  - PRESS_KEY: Set target to focused element selector or null, value to key name (for example, "Enter", "Escape", "Tab").
+  - NAVIGATE: Set target to null, value to target URL or path.
+  - GO_BACK / GO_FORWARD / RELOAD / SUMMARIZE_PAGE: Set target to null.
+  - RESPOND: Use when the user requests an informational answer (no DOM interaction). Set message to a concise human-readable summary for display and TTS. Optionally provide ttsContext for improved speech output.
+  - CLARIFY: Use when multiple plausible targets or missing information prevent a safe single action. Return clarifyOptions as an array of { label: string, selector: string } or choices; set message to an instruction the UI can speak/display. Do not attempt an interaction when emitting CLARIFY.
 
-3. Layout & Fallbacks:
-   - If the target element is off-screen (Y < 0 or Y > viewport height), set scrollRequired to true.
-   - Emit exactly ONE action per turn.
-   - If no element or system action plausibly matches the instruction, set action to "NONE", confidence to 0, target to null, and explain why in reasoning.
+3. Data & Table Intelligence:
+  - When the user asks about tabular data, numeric comparisons, or form requirements (for example, "Which plan is cheapest?" or "What does this form require?"), prefer RESPOND and use the provided structured payload (structured.tables, structured.grids) when available.
+  - When structured payload includes parsed numeric values (number, percent, currency), rely on those typed values for comparisons, sorting, and numeric reasoning rather than raw text.
+  - If an answer requires showing a brief summary, return RESPOND with a short message and include any small data pointers in reasoning or ttsContext.
+
+4. Clarification Flow:
+  - Emit CLARIFY when there are two or more reasonable targets, when a user request is underspecified, or when choosing a target could have destructive side-effects.
+  - CLARIFY payload shape: set action to "CLARIFY", message to a short human prompt, and clarifyOptions to an array of option objects, each with label and selector (or value for non-element choices). Example: { "action":"CLARIFY", "message":"Which shipping option should I choose?", "clarifyOptions":[{"label":"Standard - 5 days","selector":"#shipping-standard"},{"label":"Express - 2 days","selector":"#shipping-express"}], "target":null }
+
+5. Overlay & Modal Considerations:
+  - If the requested interaction may be blocked by overlays, modals, or dialogs, set scrollRequired appropriately and include an explanatory message so the client can attempt safe dismissal (the front-end will call its dismissal helper before executing actions).
+  - Do not attempt to click hidden or offscreen elements without indicating scrollRequired: true.
+
+6. Safety & Single-Action Rule:
+  - Emit exactly ONE action per turn. Do not bundle multiple actions into a single response.
+  - If no safe single action is possible, return { action: "NONE", confidence: 0, target: null } and a brief reasoning explaining why.
 
 Output Format:
-Return strict JSON only matching this schema. Unused fields for a given action MUST be set to null:
-{"action":"CLICK|SCROLL|TYPE|ZOOM|GO_BACK|GO_FORWARD|RELOAD|NAVIGATE|PRESS_KEY|SELECT_OPTION|CLEAR_INPUT|HOVER|HIGHLIGHT_ELEMENT|FOCUS|READ_TEXT|SUMMARIZE_PAGE|NONE","target":"CSS selector or null","value":"string or null","direction":"up|down|in|out|reset|null","amount":600,"scrollRequired":false,"confidence":0.0,"reasoning":"short explanation"}`;
+Return strict JSON only matching this schema. Unused fields for a given action MUST be set to null. Include clarifyOptions and ttsContext when relevant:
+{"action":"CLICK|RESPOND|CLARIFY|SCROLL|TYPE|ZOOM|GO_BACK|GO_FORWARD|RELOAD|NAVIGATE|PRESS_KEY|SELECT_OPTION|CLEAR_INPUT|HOVER|HIGHLIGHT_ELEMENT|FOCUS|READ_TEXT|SUMMARIZE_PAGE|NONE","target":"CSS selector or null","value":"string or null","message":"string or null (human-readable text to display)","direction":"up|down|in|out|reset|null","amount":600,"scrollRequired":false,"confidence":0.0,"reasoning":"short explanation","ttsContext":null,"clarifyOptions":null}
+
+Notes:
+ - RESPOND: Use this action when the instruction is informational (no DOM interaction). Set message to a concise natural-language summary intended for display and speech. When possible, base RESPOND answers on the structured data payload and prefer parsed numeric fields for comparisons.
+ - CLARIFY: Use this action for disambiguation. Provide clarifyOptions with short labels and selectors; the client will present them to the user and execute the selected option in a follow-up turn.
+
+Examples:
+ - RESPOND example:
+   User: "What does this form require?"
+   Expected JSON response:
+   {"action":"RESPOND","target":null,"value":null,"message":"This form requires your full name, email address, and a password (minimum 8 characters). Optional fields: company and phone.","direction":null,"amount":null,"scrollRequired":false,"confidence":0.9,"reasoning":"Summarized visible form labels and required indicators","ttsContext":"The form requires name, email, and a password." ,"clarifyOptions":null}
+
+ - CLARIFY example:
+   User: "Click the delete button"
+   Context: Two visible delete buttons in different cards
+   Expected JSON response:
+   {"action":"CLARIFY","target":null,"value":null,"message":"Which delete button did you mean?","direction":null,"amount":null,"scrollRequired":false,"confidence":0.6,"reasoning":"Multiple matching delete controls","ttsContext":null,"clarifyOptions":[{"label":"Delete from Cart","selector":"#cart .delete"},{"label":"Delete Saved Item","selector":"#saved .delete"}]}
+`;
 
 const EXECUTION_ROUTING_SYNONYMS = {
   checkout: [
@@ -63,6 +93,9 @@ const EXECUTION_ROUTING_SYNONYMS = {
   hover: ["hover", "mouse over", "focus on"],
   highlight: ["highlight", "focus", "emphasize"],
   press: ["press", "hit", "key", "keyboard"],
+  respond: ["respond", "answer", "reply", "say", "speak"],
+  dismiss: ["dismiss", "close", "exit", "cancel"],
+  clarify: ["clarify", "which one", "which option", "help me choose"],
   none: ["none", "no action", "do nothing", "not sure"],
 };
 
@@ -266,6 +299,14 @@ function buildProjectContext(projectConfig = {}) {
   const config =
     projectConfig && typeof projectConfig === "object" ? projectConfig : {};
   const parts = [];
+  const projectName = String(config.projectName || config.name || "").trim();
+
+  if (projectName) parts.push(`Project name: ${projectName}`);
+
+  const websiteUrl = String(config.websiteUrl || config.url || "").trim();
+
+  if (websiteUrl) parts.push(`Website URL: ${websiteUrl}`);
+
   const description = String(
     config.websiteDescription || config.description || "",
   ).trim();
@@ -950,6 +991,8 @@ export function normalizeActionPlan(actionPlan) {
   const normalizedAction = String(actionPlan.action || "NONE").toUpperCase();
   const allowedActions = [
     "CLICK",
+    "RESPOND",
+    "CLARIFY",
     "SCROLL",
     "TYPE",
     "ZOOM",
@@ -982,6 +1025,7 @@ export function normalizeActionPlan(actionPlan) {
     action,
     target: actionPlan.target || actionPlan.selector || null,
     value: actionPlan.value || actionPlan.text || null,
+    message: actionPlan.message || actionPlan.msg || null,
     direction: actionPlan.direction || null,
     amount: actionPlan.amount || null,
     scrollRequired: Boolean(actionPlan.scrollRequired),
@@ -992,6 +1036,7 @@ export function normalizeActionPlan(actionPlan) {
     reasoning:
       actionPlan.reasoning || actionPlan.reason || "planning completed",
     ttsContext: actionPlan.ttsContext || null,
+    clarifyOptions: actionPlan.options || actionPlan.choices || null,
   };
 }
 

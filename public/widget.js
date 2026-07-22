@@ -208,6 +208,162 @@
         return Array.isArray(payload) ? payload : elements;
       }
 
+      collectStructuredData() {
+        const structured = { tables: [], grids: [] };
+
+        try {
+          // Tables
+          const tables = Array.from(document.querySelectorAll("table"));
+          for (const table of tables) {
+            const headers = [];
+            const thead = table.querySelector("thead");
+            if (thead) {
+              const ths = thead.querySelectorAll("th");
+              ths.forEach((th) =>
+                headers.push(
+                  this.truncateText(th.innerText || th.textContent || "", 80),
+                ),
+              );
+            } else {
+              const firstRow = table.querySelector("tr");
+              if (firstRow) {
+                const ths = firstRow.querySelectorAll("th,td");
+                ths.forEach((th) =>
+                  headers.push(
+                    this.truncateText(th.innerText || th.textContent || "", 80),
+                  ),
+                );
+              }
+            }
+
+            const rows = [];
+            const trs = table.querySelectorAll("tbody tr, tr");
+
+            const parseNumericValue = (raw) => {
+              const text = String(raw || "").trim();
+              if (!text) return null;
+
+              // percent like 12%
+              const percentMatch = text.match(/^\s*([-+]?\d[\d,\.\s]*)%\s*$/);
+              if (percentMatch) {
+                const num = Number(percentMatch[1].replace(/[ ,]/g, ""));
+                return {
+                  number: Number.isFinite(num) ? num : null,
+                  percent: true,
+                  currency: null,
+                  raw: text,
+                };
+              }
+
+              // currency symbol prefix like $12.34
+              const currencyMatch = text.match(
+                /^(?:\s*)([$€£¥])\s*([-+]?\d[\d,\.]*)/,
+              );
+              if (currencyMatch) {
+                const symbol = currencyMatch[1];
+                const num = Number(currencyMatch[2].replace(/,/g, ""));
+                return {
+                  number: Number.isFinite(num) ? num : null,
+                  percent: false,
+                  currency: symbol,
+                  raw: text,
+                };
+              }
+
+              // trailing currency code like 12.34 USD
+              const currencyCodeMatch = text.match(
+                /^\s*([-+]?\d[\d,\.\s]*)\s*(USD|EUR|GBP|AUD|CAD|JPY)\s*$/i,
+              );
+              if (currencyCodeMatch) {
+                const num = Number(currencyCodeMatch[1].replace(/[ ,]/g, ""));
+                return {
+                  number: Number.isFinite(num) ? num : null,
+                  percent: false,
+                  currency: currencyCodeMatch[2].toUpperCase(),
+                  raw: text,
+                };
+              }
+
+              // plain number with commas/decimals
+              const plainNumMatch = text.match(/^\s*([-+]?\d[\d,\.]*)\s*$/);
+              if (plainNumMatch) {
+                const num = Number(plainNumMatch[1].replace(/,/g, ""));
+                return {
+                  number: Number.isFinite(num) ? num : null,
+                  percent: false,
+                  currency: null,
+                  raw: text,
+                };
+              }
+
+              return null;
+            };
+
+            trs.forEach((tr, idx) => {
+              const cells = Array.from(tr.querySelectorAll("td,th")).map(
+                (cell) => {
+                  const txt = this.truncateText(
+                    cell.innerText || cell.textContent || "",
+                    140,
+                  );
+                  const parsed = parseNumericValue(txt);
+                  return { text: txt, parsed };
+                },
+              );
+              if (cells.length) rows.push({ index: idx, cells });
+            });
+
+            structured.tables.push({
+              selector: this.buildUniqueSelector(table),
+              headers,
+              rows,
+            });
+          }
+
+          // Simple grids / repeated items: find containers with 3+ similar children
+          const potentialContainers = Array.from(
+            document.querySelectorAll("div,section,ul,ol"),
+          );
+          for (const container of potentialContainers) {
+            const children = Array.from(container.children).filter(
+              (c) => c.nodeType === Node.ELEMENT_NODE,
+            );
+            if (children.length < 3) continue;
+            const tagNames = children.map((c) => c.tagName.toLowerCase());
+            const mostCommon = tagNames.reduce(
+              (acc, t) => ((acc[t] = (acc[t] || 0) + 1), acc),
+              {},
+            );
+            const entries = Object.entries(mostCommon).sort(
+              (a, b) => b[1] - a[1],
+            );
+            if (entries.length && entries[0][1] >= 3) {
+              const sampleChildren = children.slice(
+                0,
+                Math.min(8, children.length),
+              );
+              const items = sampleChildren.map((child, i) => ({
+                index: i,
+                text: this.truncateText(
+                  child.innerText || child.textContent || "",
+                  220,
+                ),
+                selector: this.buildUniqueSelector(child),
+              }));
+              structured.grids.push({
+                selector: this.buildUniqueSelector(container),
+                itemCount: children.length,
+                items,
+              });
+            }
+          }
+        } catch (err) {
+          console.warn("[voice-widget] structured data extraction failed", err);
+        }
+
+        return structured;
+      }
+
       isTrulyInteractive(element) {
         if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
         if (element.closest("script, style, noscript, svg, head")) return false;
@@ -495,15 +651,17 @@
     Array.from(document.scripts).find((script) =>
       /widget\.js(?:\?.*)?$/.test(script.src),
     );
+  const defaultApiUrl = "https://voice-wave-ai-production.up.railway.app";
+  const defaultWsUrl = "wss://voice-wave-ai-production.up.railway.app";
   const configuredApiUrl =
     window.__VOICE_WIDGET_API_URL__ ||
     currentScript?.getAttribute("data-api-url") ||
     currentScript?.getAttribute("data-base-url") ||
-    "";
+    defaultApiUrl;
   const configuredWsUrl =
     window.__VOICE_WIDGET_WS_URL__ ||
     currentScript?.getAttribute("data-ws-url") ||
-    "";
+    defaultWsUrl;
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   const inferredOrigin = (() => {
     try {
@@ -523,9 +681,8 @@
   }
   const wsUrl =
     normalizeSocketUrl(
-      configuredWsUrl || configuredApiUrl || inferredOrigin || "",
-    ) ||
-    `${scheme}://${window.location.hostname}:${window.location.port || "3000"}`;
+      configuredWsUrl || configuredApiUrl || inferredOrigin || defaultWsUrl,
+    ) || defaultWsUrl;
 
   const domHandler = new window.AccessibilityDOMHandler({ maxElements: 40 });
   const domParser = new window.AccessibilityDOMParser({
@@ -883,6 +1040,10 @@
   function getAccessibilitySpeechText(actionPlan) {
     if (!actionPlan || !actionPlan.action) return "";
 
+    if (actionPlan.action === "RESPOND") {
+      return actionPlan.message || actionPlan.ttsContext || "";
+    }
+
     if (actionPlan.action === "READ_TEXT") {
       const target = actionPlan.target
         ? document.querySelector(actionPlan.target)
@@ -991,6 +1152,10 @@
       return "Summarizing the visible page content.";
     }
 
+    if (actionPlan.action === "RESPOND") {
+      return actionPlan.message || "Responding with information.";
+    }
+
     if (actionPlan.action === "CLICK") {
       return targetLabel
         ? `Clicking ${targetLabel}...`
@@ -1023,6 +1188,27 @@
     if (isRepeatAction) {
       return;
     }
+
+    if (actionPlan.action === "RESPOND") {
+      const message = actionPlan.message || actionPlan.ttsContext || "";
+      if (message) {
+        setFeedback(message, actionPlan);
+        try {
+          if (typeof window.speechSynthesis !== "undefined") {
+            const utter = new SpeechSynthesisUtterance(String(message));
+            try {
+              window.speechSynthesis.cancel();
+            } catch (e) {}
+            window.speechSynthesis.speak(utter);
+          } else {
+            void speakReply(message);
+          }
+        } catch (error) {
+          void speakReply(message);
+        }
+      }
+      return;
+    }
     scriptState.lastHandledActionKey = actionKey;
     scriptState.lastHandledActionAt = now;
 
@@ -1030,6 +1216,19 @@
       const message = actionPlan?.ttsContext || "No matching action.";
       setFeedback(message, actionPlan);
       void speakReply(message);
+      return;
+    }
+
+    // Handle clarify prompts specially
+    if (actionPlan.action === "CLARIFY") {
+      // Store pending clarify request
+      scriptState.pendingClarify = actionPlan;
+      const question =
+        actionPlan.message ||
+        actionPlan.ttsContext ||
+        "Which option do you mean?";
+      setFeedback(question, actionPlan);
+      void speakReply(question);
       return;
     }
 
@@ -1104,18 +1303,7 @@
     if (window.__VOICE_WIDGET_API_URL__) {
       return window.__VOICE_WIDGET_API_URL__.replace(/\/$/, "");
     }
-    if (document.currentScript && document.currentScript.src) {
-      try {
-        const scriptUrl = new URL(
-          document.currentScript.src,
-          window.location.href,
-        );
-        return scriptUrl.origin;
-      } catch (error) {
-        console.warn("[voice-widget] could not infer API URL", error);
-      }
-    }
-    return window.location.origin;
+    return "https://voice-wave-ai-production.up.railway.app";
   }
 
   if (typeof window.__CURRENT_ZOOM_LEVEL__ === "undefined") {
@@ -1127,10 +1315,56 @@
       return;
     }
 
+    // Dismiss overlays/popups that could block interactions
+    function dismissOverlays() {
+      try {
+        const overlays = Array.from(
+          document.querySelectorAll(
+            '[role="dialog"], .cookie, .cookie-consent, .cookie-banner, [data-modal], [data-overlay], [aria-hidden="false"]',
+          ),
+        );
+        for (const overlay of overlays) {
+          try {
+            // try common close buttons
+            const closeSelectors = [
+              'button[aria-label*="close"]',
+              "button.close",
+              "[data-dismiss] button",
+              "[data-close]",
+              ".close",
+              'button[title*="close"]',
+            ];
+            let closed = false;
+            for (const sel of closeSelectors) {
+              const btn =
+                overlay.querySelector(sel) || document.querySelector(sel);
+              if (btn) {
+                btn.click();
+                closed = true;
+                break;
+              }
+            }
+            if (!closed) {
+              // try removing element if it's not essential
+              const style = window.getComputedStyle(overlay);
+              if (style.position === "fixed" || style.position === "absolute") {
+                overlay.parentElement?.removeChild(overlay);
+              }
+            }
+          } catch (e) {
+            console.warn("[voice-widget] overlay dismissal failed", e);
+          }
+        }
+      } catch (err) {
+        console.warn("[voice-widget] dismissOverlays error", err);
+      }
+    }
+
     if (actionPlan.action === "CLICK") {
       const target = actionPlan.target
         ? document.querySelector(actionPlan.target)
         : null;
+      dismissOverlays();
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         target.click();
@@ -1172,6 +1406,7 @@
       const target = actionPlan.target
         ? document.querySelector(actionPlan.target)
         : null;
+      dismissOverlays();
       if (
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
@@ -1221,6 +1456,7 @@
       const target = actionPlan.target
         ? document.querySelector(actionPlan.target)
         : null;
+      dismissOverlays();
       if (target && target.tagName === "SELECT") {
         target.value = actionPlan.value || target.value;
         target.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1324,6 +1560,82 @@
 
     const rawElements = domParser.collectContext();
     const elements = domHandler.prepareContext(rawElements);
+    const structured = domParser.collectStructuredData
+      ? domParser.collectStructuredData()
+      : { tables: [], grids: [] };
+    // If awaiting clarification, attempt to resolve based on transcript
+    if (scriptState.pendingClarify) {
+      const pending = scriptState.pendingClarify;
+      const options = Array.isArray(
+        pending.options || pending.choices || pending.clarifyOptions,
+      )
+        ? pending.options || pending.choices || pending.clarifyOptions
+        : pending.clarifyOptions || null;
+      if (options && options.length) {
+        const lowered = trimmedText.toLowerCase();
+        // Try numeric selection
+        const numberMatch = trimmedText.match(/\b(\d+)\b/);
+        let chosen = null;
+        if (numberMatch) {
+          const idx = Number(numberMatch[1]) - 1;
+          if (options[idx]) chosen = options[idx];
+        }
+        // Try label matching
+        if (!chosen) {
+          for (const opt of options) {
+            const label = String(
+              opt.label || opt.name || opt.text || opt.title || opt.value || "",
+            ).toLowerCase();
+            if (label && lowered.includes(label)) {
+              chosen = opt;
+              break;
+            }
+          }
+        }
+
+        if (chosen) {
+          // Clear pending
+          scriptState.pendingClarify = null;
+          setFeedback(
+            `Selected: ${chosen.label || chosen.name || chosen.text || chosen.value || "option"}`,
+          );
+          // If option includes selector, execute it directly
+          if (chosen.selector) {
+            showActionPlan({
+              action: "CLICK",
+              target: chosen.selector,
+              reason: "clarify selection",
+            });
+            return;
+          }
+          // Otherwise, send follow-up to backend with chosen label
+          const followup = String(
+            chosen.label || chosen.name || chosen.text || chosen.value || "",
+          );
+          if (followup) {
+            if (
+              scriptState.socket &&
+              scriptState.socket.readyState === WebSocket.OPEN
+            ) {
+              scriptState.socket.send(
+                JSON.stringify({
+                  type: "intent",
+                  transcript: followup,
+                  elements,
+                  structured,
+                  projectId:
+                    currentScript?.getAttribute("data-project-id") || "",
+                }),
+              );
+            } else {
+              postIntentToBackend(followup, elements, structured);
+            }
+            return;
+          }
+        }
+      }
+      // If not resolved, continue to send as normal transcript
+    }
     if (
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
@@ -1333,11 +1645,12 @@
           type: "intent",
           transcript: trimmedText,
           elements,
+          structured,
           projectId: currentScript?.getAttribute("data-project-id") || "",
         }),
       );
     } else {
-      postIntentToBackend(trimmedText, elements);
+      postIntentToBackend(trimmedText, elements, structured);
     }
   }
 
@@ -1350,6 +1663,9 @@
         body: JSON.stringify({
           transcript,
           elements,
+          structured: domParser.collectStructuredData
+            ? domParser.collectStructuredData()
+            : { tables: [], grids: [] },
           projectId: currentScript?.getAttribute("data-project-id") || "",
         }),
       });

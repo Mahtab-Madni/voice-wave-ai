@@ -37,6 +37,14 @@ The latest version adds a few important reliability and intelligence upgrades:
 - Session-based conversational memory for websocket conversations so follow-up commands such as “click it again” or “click the second button” can be disambiguated using recent turns.
 - Persistent interaction logging in MongoDB, including the transcript, selected action, confidence, session ID, conversational context, and generated TTS context.
 
+Additional intelligence and UX improvements in this release:
+
+- **Informational LLM Responses (`RESPOND`)**: The planner can now return an informational `RESPOND` action (no DOM interaction) with a concise `message` and optional `ttsContext` for spoken summaries (useful for "What does this form require?" queries).
+- **Clarification Flow (`CLARIFY`)**: When a command is ambiguous, the planner emits `CLARIFY` with `clarifyOptions` (labels + selectors). The widget presents choices to the user and executes the selected option in a follow-up turn.
+- **Structured table/grid extraction + numeric parsing**: The widget extracts structured `tables` and `grids` payloads and parses numeric cell values (numbers, percents, currencies) so the planner can reason with typed numeric values for comparisons and sorting.
+- **Overlay & modal dismissal**: The widget includes safe overlay/modal dismissal helpers that the client can call before attempting interactions, reducing blocked clicks and improving reliability.
+- **Voice-driven navigation and richer clarification flows**: Improved routing synonyms and planner guidance to handle navigation, index-based selections ("second", "last"), and conversational follow-ups.
+
 ## How to use the widget
 
 The widget is designed to be dropped into a website and used immediately.
@@ -117,6 +125,8 @@ Voice-wave supports a comprehensive set of 17 automation actions, organized into
 - **FOCUS**: Focus on an element for better accessibility
 - **READ_TEXT**: Extract and speak the content of any element or section
 - **SUMMARIZE_PAGE**: Generate a brief spoken summary of the page content
+- **RESPOND**: Return a human-readable informational summary (no action) for queries about page content or form requirements.
+- **CLARIFY**: Ask the user to disambiguate among multiple targets; returns options the widget will render and act on after selection.
 
 ## Architecture
 
@@ -358,6 +368,9 @@ The current implementation is strongest in:
 - round-robin API key rotation across providers
 - session-scoped conversational context for follow-up commands
 - MongoDB-backed interaction logging with session and TTS context
+- structured table/grid extraction and numeric parsing for better data-aware responses
+- overlay/modal dismissal support to reduce blocked interactions
+- Planner supports `RESPOND` and `CLARIFY` flows for safer, more helpful automation
 
 ## Why this project exists
 
