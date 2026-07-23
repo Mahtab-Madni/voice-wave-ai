@@ -118,10 +118,10 @@ async function transcribeAudio(session, config, keyRotator = null) {
     const CHUNK_WAIT_THRESHOLD = 12;
     if (chunks.length < CHUNK_WAIT_THRESHOLD && retryCount < 4) {
       session._transcriptionRetryCount = retryCount + 1;
-      console.warn(
-        "[ws] no EBML header yet, scheduling retry",
-        { attempt: session._transcriptionRetryCount, chunks: chunks.length },
-      );
+      console.warn("[ws] no EBML header yet, scheduling retry", {
+        attempt: session._transcriptionRetryCount,
+        chunks: chunks.length,
+      });
       if (session.flushTimer) {
         clearTimeout(session.flushTimer);
         session.flushTimer = null;
