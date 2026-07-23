@@ -1916,6 +1916,16 @@
             if (transcript) {
               submitPendingTranscript(transcript);
             }
+          } else if (payload && payload.type === "drop") {
+            console.warn("[voice-widget] server dropped audio:", payload.reason);
+            // Retry flush after a short backoff to give the recorder time to emit init
+            window.setTimeout(() => {
+              try {
+                flushAudioNow();
+              } catch (e) {
+                console.warn("[voice-widget] retry flush failed", e);
+              }
+            }, 300);
           } else if (payload && payload.type === "action") {
             showActionPlan(payload.action);
           }
@@ -2282,6 +2292,14 @@
         };
 
         scriptState.mediaRecorder.start();
+        // Force an initial dataavailable event so the init EBML header is sent
+        try {
+          if (typeof scriptState.mediaRecorder.requestData === "function") {
+            scriptState.mediaRecorder.requestData();
+          }
+        } catch (err) {
+          console.warn("[voice-widget] requestData after start failed", err);
+        }
         scriptState.listening = true;
         scriptState.pendingFlushRequest = false;
         scriptState.lastVoiceActivityAt = performance.now();

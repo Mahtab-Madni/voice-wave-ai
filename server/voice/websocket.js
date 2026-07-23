@@ -145,6 +145,11 @@ async function transcribeAudio(session, config, keyRotator = null) {
       "[ws] dropped audio chunk: EBML header not found (likely partial fragment)",
       { bytes: audioBuffer.length, mimeType: session.mimeType },
     );
+    try {
+      session.socket.send(
+        JSON.stringify({ type: "drop", reason: "no-ebml", bytes: audioBuffer.length }),
+      );
+    } catch (e) {}
     // Clear buffered chunks and retry counter for safety
     clearAudioChunk(session);
     if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
@@ -160,6 +165,11 @@ async function transcribeAudio(session, config, keyRotator = null) {
       "[ws] dropped audio chunk: payload too small after header slicing",
       { bytes: payload.length },
     );
+    try {
+      session.socket.send(
+        JSON.stringify({ type: "drop", reason: "too-small", bytes: payload.length }),
+      );
+    } catch (e) {}
     clearAudioChunk(session);
     if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
     return null;
@@ -193,6 +203,11 @@ async function transcribeAudio(session, config, keyRotator = null) {
       "[ws] Deepgram transcription failed, dropping corrupted audio chunk",
       { status: response.status, detail },
     );
+    try {
+      session.socket.send(
+        JSON.stringify({ type: "drop", reason: "transcription-failed", status: response.status, detail }),
+      );
+    } catch (e) {}
     // Clear chunks on failure to avoid repeated failing payloads
     clearAudioChunk(session);
     if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
