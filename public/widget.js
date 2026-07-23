@@ -1195,6 +1195,7 @@
       setFeedback(scriptState.listening ? "Listening..." : "Ready");
     }, 2200);
     await speakReply(message);
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
   }
 
   async function handleActionPlan(actionPlan) {
@@ -1221,11 +1222,14 @@
               window.speechSynthesis.cancel();
             } catch (e) {}
             window.speechSynthesis.speak(utter);
+            await new Promise((resolve) => window.setTimeout(resolve, 600));
           } else {
-            void speakReply(message);
+            await speakReply(message);
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
           }
         } catch (error) {
-          void speakReply(message);
+          await speakReply(message);
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
         }
       }
       return;
@@ -1249,7 +1253,8 @@
         actionPlan.ttsContext ||
         "Which option do you mean?";
       setFeedback(question, actionPlan);
-      void speakReply(question);
+      await speakReply(question);
+      await new Promise((resolve) => window.setTimeout(resolve, 400));
       return;
     }
 
