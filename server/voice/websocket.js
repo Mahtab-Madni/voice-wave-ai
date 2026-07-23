@@ -104,7 +104,6 @@ async function transcribeAudio(session, config, keyRotator = null) {
   }
 
   const audioBuffer = Buffer.concat(chunks);
-  clearAudioChunk(session);
 
   // Ensure a sane base content type
   let contentType = String(session.mimeType || "audio/webm").trim();
@@ -114,10 +113,41 @@ async function transcribeAudio(session, config, keyRotator = null) {
   const EBML = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
   const headerIndex = audioBuffer.indexOf(EBML);
   if (headerIndex === -1) {
+    // If we have only a few chunks so far, wait a bit for the initialization header
+    const retryCount = session._transcriptionRetryCount || 0;
+    const CHUNK_WAIT_THRESHOLD = 12;
+    if (chunks.length < CHUNK_WAIT_THRESHOLD && retryCount < 4) {
+      session._transcriptionRetryCount = retryCount + 1;
+      console.warn(
+        "[ws] no EBML header yet, scheduling retry",
+        { attempt: session._transcriptionRetryCount, chunks: chunks.length },
+      );
+      if (session.flushTimer) {
+        clearTimeout(session.flushTimer);
+        session.flushTimer = null;
+      }
+      session.flushTimer = setTimeout(async () => {
+        session.flushTimer = null;
+        const text = await transcribeAudio(session, config, keyRotator);
+        if (text) {
+          session.transcripts.push(text);
+          try {
+            session.socket.send(
+              JSON.stringify({ type: "transcript", source: "deepgram", text }),
+            );
+          } catch (e) {}
+        }
+      }, 400);
+      return null;
+    }
+
     console.warn(
       "[ws] dropped audio chunk: EBML header not found (likely partial fragment)",
       { bytes: audioBuffer.length, mimeType: session.mimeType },
     );
+    // Clear buffered chunks and retry counter for safety
+    clearAudioChunk(session);
+    if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
     return null;
   }
 
@@ -130,6 +160,8 @@ async function transcribeAudio(session, config, keyRotator = null) {
       "[ws] dropped audio chunk: payload too small after header slicing",
       { bytes: payload.length },
     );
+    clearAudioChunk(session);
+    if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
     return null;
   }
 
@@ -151,6 +183,7 @@ async function transcribeAudio(session, config, keyRotator = null) {
     });
   } catch (error) {
     console.error("[ws] Deepgram network failure", error.message);
+    // keep chunks buffered for retry
     return null;
   }
 
@@ -160,8 +193,15 @@ async function transcribeAudio(session, config, keyRotator = null) {
       "[ws] Deepgram transcription failed, dropping corrupted audio chunk",
       { status: response.status, detail },
     );
+    // Clear chunks on failure to avoid repeated failing payloads
+    clearAudioChunk(session);
+    if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
     return null;
   }
+
+  // On success, clear buffered chunks and reset retry counter
+  clearAudioChunk(session);
+  if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
 
   const result = await response.json();
   return (
