@@ -90,22 +90,45 @@ function scheduleTranscription(session, config, keyRotator = null) {
 
 async function transcribeAudio(session, config, keyRotator = null) {
   const deepgramApiKey = getDeepgramApiKey(config, keyRotator);
-  if (!deepgramApiKey || !session.audioChunk) return null;
+  if (!deepgramApiKey) return null;
 
-  const audioBuffer = session.audioChunk;
-  clearAudioChunk(session);
+  // Build a combined buffer from recent chunks (if present)
+  const chunks = Array.isArray(session.audioChunks)
+    ? session.audioChunks.slice()
+    : session.audioChunk
+      ? [session.audioChunk]
+      : [];
 
-  let contentType = String(session.mimeType || "audio/webm").trim();
-  if (contentType.includes("audio/webm")) {
-    contentType = "audio/webm";
+  if (!chunks || chunks.length === 0) {
+    return null;
   }
 
-  if (audioBuffer.length === 0) {
+  const audioBuffer = Buffer.concat(chunks);
+  clearAudioChunk(session);
+
+  // Ensure a sane base content type
+  let contentType = String(session.mimeType || "audio/webm").trim();
+  if (contentType.includes("audio/webm")) contentType = "audio/webm";
+
+  // Validate EBML header for WebM (0x1A45DFA3). If missing, drop payload.
+  const EBML = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
+  const headerIndex = audioBuffer.indexOf(EBML);
+  if (headerIndex === -1) {
     console.warn(
-      "[ws] skipping Deepgram transcription for empty audio payload",
-      {
-        contentType,
-      },
+      "[ws] dropped audio chunk: EBML header not found (likely partial fragment)",
+      { bytes: audioBuffer.length, mimeType: session.mimeType },
+    );
+    return null;
+  }
+
+  // Slice from EBML header to attempt to produce a valid WebM payload
+  const payload = audioBuffer.slice(headerIndex);
+
+  // Minimum size heuristic: require at least 2 KB
+  if (payload.length < 2048) {
+    console.warn(
+      "[ws] dropped audio chunk: payload too small after header slicing",
+      { bytes: payload.length },
     );
     return null;
   }
@@ -113,7 +136,7 @@ async function transcribeAudio(session, config, keyRotator = null) {
   console.log("[ws] sending audio to Deepgram", {
     mimeType: session.mimeType,
     contentType,
-    bytes: audioBuffer.length,
+    bytes: payload.length,
   });
 
   let response;
@@ -124,7 +147,7 @@ async function transcribeAudio(session, config, keyRotator = null) {
         Authorization: `Token ${deepgramApiKey}`,
         "Content-Type": contentType,
       },
-      body: audioBuffer,
+      body: payload,
     });
   } catch (error) {
     console.error("[ws] Deepgram network failure", error.message);
