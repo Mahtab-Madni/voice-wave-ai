@@ -641,6 +641,8 @@
     lastHandledActionKey: "",
     lastHandledActionAt: 0,
     isExpanded: false,
+    initChunk: null,
+    initChunkLastSentAt: 0,
   };
 
   const overlayId = "voice-widget-overlay";
@@ -1576,12 +1578,23 @@
       : new MediaRecorder(stream);
 
     mediaRecorder.ondataavailable = (event) => {
-      if (
-        event.data.size > 0 &&
-        scriptState.socket &&
-        scriptState.socket.readyState === WebSocket.OPEN
-      ) {
-        scriptState.socket.send(event.data);
+      if (event.data && event.data.size > 0) {
+        // capture initial chunk for later flushes (contains EBML header)
+        if (!scriptState.initChunk) {
+          try {
+            event.data.arrayBuffer().then((ab) => {
+              try {
+                scriptState.initChunk = ab;
+              } catch (e) {}
+            });
+          } catch (e) {}
+        }
+        if (
+          scriptState.socket &&
+          scriptState.socket.readyState === WebSocket.OPEN
+        ) {
+          scriptState.socket.send(event.data);
+        }
       }
 
       if (scriptState.pendingFlushRequest) {
@@ -1917,7 +1930,10 @@
               submitPendingTranscript(transcript);
             }
           } else if (payload && payload.type === "drop") {
-            console.warn("[voice-widget] server dropped audio:", payload.reason);
+            console.warn(
+              "[voice-widget] server dropped audio:",
+              payload.reason,
+            );
             // Retry flush after a short backoff to give the recorder time to emit init
             window.setTimeout(() => {
               try {
@@ -2087,6 +2103,23 @@
         pendingFlushRequest: scriptState.pendingFlushRequest,
       });
       try {
+        // Send cached init chunk first if available and not recently sent
+        try {
+          const now = Date.now();
+          if (
+            scriptState.initChunk &&
+            scriptState.socket &&
+            scriptState.socket.readyState === WebSocket.OPEN &&
+            now - (scriptState.initChunkLastSentAt || 0) > 300
+          ) {
+            try {
+              scriptState.socket.send(scriptState.initChunk);
+              scriptState.initChunkLastSentAt = now;
+            } catch (e) {
+              // ignore send errors
+            }
+          }
+        } catch (e) {}
         scriptState.mediaRecorder.requestData();
         return;
       } catch (error) {
@@ -2252,11 +2285,17 @@
         }
 
         scriptState.mediaRecorder.ondataavailable = (event) => {
-          if (
-            event.data.size > 0 &&
-            scriptState.socket &&
-            scriptState.socket.readyState === WebSocket.OPEN
-          ) {
+          if (event.data && event.data.size > 0) {
+            // capture initial chunk for later flushes
+            if (!scriptState.initChunk) {
+              try {
+                event.data.arrayBuffer().then((ab) => {
+                  try {
+                    scriptState.initChunk = ab;
+                  } catch (e) {}
+                });
+              } catch (e) {}
+            }
             console.debug(
               "[voice-widget] mediaRecorder ondataavailable sending chunk",
               {
