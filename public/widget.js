@@ -628,6 +628,7 @@
     audioActivityFrame: null,
     pendingFlushRequest: false,
     mediaMimeType: null,
+    chunkFlushTimer: null,
     transcriptDispatchInFlight: new Set(),
     lastSpokenMessageKey: "",
     lastSpokenAt: 0,
@@ -1839,6 +1840,41 @@
     }
   }
 
+  function clearChunkFlushTimer() {
+    if (scriptState.chunkFlushTimer) {
+      window.clearInterval(scriptState.chunkFlushTimer);
+      scriptState.chunkFlushTimer = null;
+    }
+  }
+
+  function startChunkFlushLoop() {
+    clearChunkFlushTimer();
+
+    if (
+      !scriptState.mediaRecorder ||
+      scriptState.mediaRecorder.state !== "recording"
+    ) {
+      return;
+    }
+
+    scriptState.chunkFlushTimer = window.setInterval(() => {
+      if (
+        !scriptState.listening ||
+        !scriptState.mediaRecorder ||
+        scriptState.mediaRecorder.state !== "recording"
+      ) {
+        clearChunkFlushTimer();
+        return;
+      }
+
+      try {
+        scriptState.mediaRecorder.requestData();
+      } catch (error) {
+        console.warn("[voice-widget] failed to request media recorder data", error);
+      }
+    }, 700);
+  }
+
   function flushAudioNow() {
     if (!scriptState.listening) return;
 
@@ -2060,7 +2096,9 @@
 
         scriptState.mediaRecorder.start();
         scriptState.listening = true;
+        scriptState.pendingFlushRequest = false;
         scriptState.lastVoiceActivityAt = performance.now();
+        startChunkFlushLoop();
         setStatus("Listening");
         setListeningState(true);
         setFeedback("Streaming audio...");
@@ -2078,6 +2116,7 @@
 
     scriptState.listening = false;
     clearSilenceTimer();
+    clearChunkFlushTimer();
     if (scriptState.pendingTranscriptTimer) {
       window.clearTimeout(scriptState.pendingTranscriptTimer);
       scriptState.pendingTranscriptTimer = null;
