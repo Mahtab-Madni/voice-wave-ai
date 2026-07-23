@@ -96,12 +96,11 @@ async function transcribeAudio(session, config, keyRotator = null) {
   clearAudioChunk(session);
 
   const contentType = String(session.mimeType || "audio/webm").trim();
-  if (audioBuffer.length < 2048) {
+  if (audioBuffer.length === 0) {
     console.warn(
-      "[ws] skipping Deepgram transcription for tiny audio payload",
+      "[ws] skipping Deepgram transcription for empty audio payload",
       {
         contentType,
-        bytes: audioBuffer.length,
       },
     );
     return null;
@@ -173,6 +172,7 @@ export function setupVoiceWebSocket(server, config = {}) {
     socket.on("message", async (data, isBinary) => {
       if (isBinary) {
         appendChunk(session, data);
+        scheduleTranscription(session, config, deepgramKeyRotator);
         console.debug("[ws] received audio chunk", {
           latestSize: data.byteLength || data.length || 0,
         });

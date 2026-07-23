@@ -991,23 +991,6 @@
     };
 
     try {
-      if (typeof window.speechSynthesis !== "undefined") {
-        const utterance = new SpeechSynthesisUtterance(message);
-        utterance.lang = "en-US";
-        utterance.addEventListener("end", resolvePlayback);
-        utterance.addEventListener("error", resolvePlayback);
-        try {
-          window.speechSynthesis.cancel();
-        } catch (error) {
-          console.warn(
-            "[voice-widget] could not cancel speech synthesis",
-            error,
-          );
-        }
-        window.speechSynthesis.speak(utterance);
-        return;
-      }
-
       const response = await fetch(`${getApiBaseUrl()}/api/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1216,17 +1199,8 @@
       if (message) {
         setFeedback(message, actionPlan);
         try {
-          if (typeof window.speechSynthesis !== "undefined") {
-            const utter = new SpeechSynthesisUtterance(String(message));
-            try {
-              window.speechSynthesis.cancel();
-            } catch (e) {}
-            window.speechSynthesis.speak(utter);
-            await new Promise((resolve) => window.setTimeout(resolve, 600));
-          } else {
-            await speakReply(message);
-            await new Promise((resolve) => window.setTimeout(resolve, 400));
-          }
+          await speakReply(message);
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
         } catch (error) {
           await speakReply(message);
           await new Promise((resolve) => window.setTimeout(resolve, 400));
