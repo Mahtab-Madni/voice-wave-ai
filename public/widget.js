@@ -629,6 +629,9 @@
     pendingFlushRequest: false,
     mediaMimeType: null,
     chunkFlushTimer: null,
+    resumeListeningTimer: null,
+    isProcessingAction: false,
+    resumeListeningAfterAction: false,
     transcriptDispatchInFlight: new Set(),
     lastSpokenMessageKey: "",
     lastSpokenAt: 0,
@@ -1182,6 +1185,69 @@
     await new Promise((resolve) => window.setTimeout(resolve, 400));
   }
 
+  function clearResumeListeningTimer() {
+    if (scriptState.resumeListeningTimer) {
+      window.clearTimeout(scriptState.resumeListeningTimer);
+      scriptState.resumeListeningTimer = null;
+    }
+  }
+
+  function pauseListeningForExecution() {
+    if (scriptState.listening) {
+      scriptState.listening = false;
+    }
+
+    clearSilenceTimer();
+    clearChunkFlushTimer();
+    clearResumeListeningTimer();
+
+    if (scriptState.pendingTranscriptTimer) {
+      window.clearTimeout(scriptState.pendingTranscriptTimer);
+      scriptState.pendingTranscriptTimer = null;
+    }
+
+    if (
+      scriptState.mediaRecorder &&
+      scriptState.mediaRecorder.state !== "inactive"
+    ) {
+      try {
+        scriptState.mediaRecorder.stop();
+      } catch (error) {
+        console.warn("[voice-widget] could not stop media recorder", error);
+      }
+    }
+
+    if (scriptState.stream) {
+      try {
+        scriptState.stream.getTracks().forEach((track) => track.stop());
+      } catch (error) {
+        console.warn("[voice-widget] could not stop media stream", error);
+      }
+      scriptState.stream = null;
+    }
+
+    stopRecognition();
+    scriptState.mediaRecorder = null;
+    scriptState.isProcessingAction = true;
+    scriptState.resumeListeningAfterAction = true;
+    setListeningState(false);
+    setStatus("Processing command");
+    setFeedback("Processing command...");
+  }
+
+  function resumeListeningAfterExecution() {
+    if (!scriptState.resumeListeningAfterAction) return;
+
+    scriptState.resumeListeningAfterAction = false;
+    clearResumeListeningTimer();
+    scriptState.resumeListeningTimer = window.setTimeout(() => {
+      scriptState.resumeListeningTimer = null;
+      scriptState.isProcessingAction = false;
+      if (scriptState.listening) return;
+      startListening();
+    }, 900);
+  }
+
   async function handleActionPlan(actionPlan) {
     const actionKey = `${actionPlan?.action || "NONE"}:${String(
       actionPlan?.ttsContext || actionPlan?.reasoning || "",
@@ -1195,46 +1261,52 @@
       return;
     }
 
-    if (actionPlan.action === "RESPOND") {
-      const message = actionPlan.message || actionPlan.ttsContext || "";
-      if (message) {
-        setFeedback(message, actionPlan);
-        try {
-          await speakReply(message);
-          await new Promise((resolve) => window.setTimeout(resolve, 400));
-        } catch (error) {
-          await speakReply(message);
-          await new Promise((resolve) => window.setTimeout(resolve, 400));
+    pauseListeningForExecution();
+
+    try {
+      if (actionPlan.action === "RESPOND") {
+        const message = actionPlan.message || actionPlan.ttsContext || "";
+        if (message) {
+          setFeedback(message, actionPlan);
+          try {
+            await speakReply(message);
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
+          } catch (error) {
+            await speakReply(message);
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
+          }
         }
+        return;
       }
-      return;
-    }
-    scriptState.lastHandledActionKey = actionKey;
-    scriptState.lastHandledActionAt = now;
+      scriptState.lastHandledActionKey = actionKey;
+      scriptState.lastHandledActionAt = now;
 
-    if (!actionPlan || !actionPlan.action || actionPlan.action === "NONE") {
-      const message = actionPlan?.ttsContext || "No matching action.";
-      setFeedback(message, actionPlan);
-      void speakReply(message);
-      return;
-    }
+      if (!actionPlan || !actionPlan.action || actionPlan.action === "NONE") {
+        const message = actionPlan?.ttsContext || "No matching action.";
+        setFeedback(message, actionPlan);
+        await speakReply(message);
+        return;
+      }
 
-    // Handle clarify prompts specially
-    if (actionPlan.action === "CLARIFY") {
-      // Store pending clarify request
-      scriptState.pendingClarify = actionPlan;
-      const question =
-        actionPlan.message ||
-        actionPlan.ttsContext ||
-        "Which option do you mean?";
-      setFeedback(question, actionPlan);
-      await speakReply(question);
-      await new Promise((resolve) => window.setTimeout(resolve, 400));
-      return;
-    }
+      // Handle clarify prompts specially
+      if (actionPlan.action === "CLARIFY") {
+        // Store pending clarify request
+        scriptState.pendingClarify = actionPlan;
+        const question =
+          actionPlan.message ||
+          actionPlan.ttsContext ||
+          "Which option do you mean?";
+        setFeedback(question, actionPlan);
+        await speakReply(question);
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+        return;
+      }
 
-    await announceAction(actionPlan);
-    executeActionPlan(actionPlan);
+      await announceAction(actionPlan);
+      executeActionPlan(actionPlan);
+    } finally {
+      resumeListeningAfterExecution();
+    }
   }
 
   function createOverlay() {
@@ -2115,6 +2187,9 @@
     const elements = domHandler.prepareContext(rawElements);
 
     scriptState.listening = false;
+    scriptState.isProcessingAction = false;
+    scriptState.resumeListeningAfterAction = false;
+    clearResumeListeningTimer();
     clearSilenceTimer();
     clearChunkFlushTimer();
     if (scriptState.pendingTranscriptTimer) {

@@ -430,6 +430,30 @@ function buildFallbackTtsContext(transcript, actionPlan, elements = []) {
   return "Performing the requested action.";
 }
 
+export function summarizeConversationContext(
+  conversationContext = [],
+  limit = 2,
+) {
+  if (!Array.isArray(conversationContext) || conversationContext.length === 0) {
+    return "";
+  }
+
+  return conversationContext
+    .slice(-Math.max(1, limit))
+    .map((entry) => {
+      const transcript = String(entry?.transcript || "").trim();
+      const action = String(entry?.action || "").trim();
+      const ttsContext = String(entry?.ttsContext || "").trim();
+      const parts = [];
+      if (transcript) parts.push(`User: ${transcript}`);
+      if (action) parts.push(`Assistant action: ${action}`);
+      if (ttsContext) parts.push(`Assistant response: ${ttsContext}`);
+      return parts.join(" | ");
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildConversationContextPrompt(conversationContext = "") {
   if (!conversationContext) return "";
   return `Conversation context:\n${conversationContext}\n`;

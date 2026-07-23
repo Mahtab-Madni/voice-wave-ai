@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildRuleBasedActionPlan,
   normalizeActionPlan,
+  summarizeConversationContext,
 } from "../server/voice/planner.js";
 
 test("buildRuleBasedActionPlan maps navigation and keyboard actions", () => {
@@ -45,4 +46,16 @@ test("buildRuleBasedActionPlan preserves a concise summary phrase", () => {
 
   assert.equal(summaryAction.action, "SUMMARIZE_PAGE");
   assert.match(summaryPhrase, /brief|summary|page/i);
+});
+
+test("summarizeConversationContext keeps the most recent turns", () => {
+  const summary = summarizeConversationContext([
+    { transcript: "first turn", action: "CLICK", ttsContext: "First" },
+    { transcript: "second turn", action: "TYPE", ttsContext: "Second" },
+    { transcript: "third turn", action: "RESPOND", ttsContext: "Third" },
+  ]);
+
+  assert.match(summary, /third turn/);
+  assert.match(summary, /second turn/);
+  assert.doesNotMatch(summary, /first turn/);
 });
