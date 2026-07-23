@@ -76,9 +76,8 @@ router.post("/tts", async (req, res) => {
 
     const audioPayload = buildSpeechifyAudioResponse(response.audio_data);
     res.setHeader("Content-Type", audioPayload.contentType);
-    res.setHeader("Content-Length", audioPayload.body.length);
     res.setHeader("Cache-Control", "no-store");
-    res.end(audioPayload.body);
+    res.send(audioPayload.body);
   } catch (error) {
     console.error("[tts] speech synthesis failed", error.message);
     res.status(500).json({ ok: false, error: error.message });
