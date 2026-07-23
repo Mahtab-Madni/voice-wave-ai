@@ -95,7 +95,11 @@ async function transcribeAudio(session, config, keyRotator = null) {
   const audioBuffer = session.audioChunk;
   clearAudioChunk(session);
 
-  const contentType = String(session.mimeType || "audio/webm").trim();
+  let contentType = String(session.mimeType || "audio/webm").trim();
+  if (contentType.includes("audio/webm")) {
+    contentType = "audio/webm";
+  }
+
   if (audioBuffer.length === 0) {
     console.warn(
       "[ws] skipping Deepgram transcription for empty audio payload",
@@ -112,36 +116,28 @@ async function transcribeAudio(session, config, keyRotator = null) {
     bytes: audioBuffer.length,
   });
 
-  let response = await fetch(DEEPGRAM_TRANSCRIPTION_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${deepgramApiKey}`,
-      "Content-Type": contentType,
-    },
-    body: audioBuffer,
-  });
-
-  if (!response.ok && response.status === 400 && contentType.includes(";")) {
-    const fallbackType = contentType.split(";")[0].trim();
-    console.warn(
-      "[ws] Deepgram rejected explicit codec type, retrying with base content type",
-      { contentType, fallbackType },
-    );
+  let response;
+  try {
     response = await fetch(DEEPGRAM_TRANSCRIPTION_URL, {
       method: "POST",
       headers: {
         Authorization: `Token ${deepgramApiKey}`,
-        "Content-Type": fallbackType,
+        "Content-Type": contentType,
       },
       body: audioBuffer,
     });
+  } catch (error) {
+    console.error("[ws] Deepgram network failure", error.message);
+    return null;
   }
 
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(
-      `Deepgram transcription failed (${response.status}): ${detail}`,
+    const detail = await response.text().catch(() => "<no details>");
+    console.warn(
+      "[ws] Deepgram transcription failed, dropping corrupted audio chunk",
+      { status: response.status, detail },
     );
+    return null;
   }
 
   const result = await response.json();
