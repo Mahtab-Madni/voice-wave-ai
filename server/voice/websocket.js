@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { WebSocketServer } from "ws";
 import { buildActionPlan } from "./planner.js";
+import { appendChunk, clearAudioChunk } from "./audioSession.js";
 import Project from "../models/Project.js";
 import InteractionLog from "../models/InteractionLog.js";
 import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
@@ -69,11 +70,6 @@ function getSession(sessions, clientId, socket) {
   return sessions.get(clientId);
 }
 
-function appendChunk(session, chunk) {
-  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  session.audioChunk = data;
-}
-
 function scheduleTranscription(session, config, keyRotator = null) {
   const deepgramApiKey = getDeepgramApiKey(config, keyRotator);
   if (!deepgramApiKey) return;
@@ -97,7 +93,7 @@ async function transcribeAudio(session, config, keyRotator = null) {
   if (!deepgramApiKey || !session.audioChunk) return null;
 
   const audioBuffer = session.audioChunk;
-  session.audioChunk = null;
+  clearAudioChunk(session);
 
   const contentType = String(session.mimeType || "audio/webm").trim();
   if (audioBuffer.length < 2048) {

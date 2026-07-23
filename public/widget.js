@@ -941,6 +941,14 @@
     feedback.appendChild(text);
   }
 
+  function estimateSpeechDurationMs(text) {
+    const wordCount = String(text || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean).length;
+    return Math.max(900, wordCount * 250 + 600);
+  }
+
   async function speakReply(text) {
     const message = String(text || "").trim();
     if (!message) return;
@@ -969,7 +977,37 @@
       scriptState.activeAudio = null;
     }
 
+    const finalizePlayback = () => {
+      if (
+        scriptState.activePlaybackRequestId === playbackRequestId &&
+        scriptState.activeAudio
+      ) {
+        scriptState.activeAudio = null;
+      }
+    };
+
+    const resolvePlayback = () => {
+      finalizePlayback();
+    };
+
     try {
+      if (typeof window.speechSynthesis !== "undefined") {
+        const utterance = new SpeechSynthesisUtterance(message);
+        utterance.lang = "en-US";
+        utterance.addEventListener("end", resolvePlayback);
+        utterance.addEventListener("error", resolvePlayback);
+        try {
+          window.speechSynthesis.cancel();
+        } catch (error) {
+          console.warn(
+            "[voice-widget] could not cancel speech synthesis",
+            error,
+          );
+        }
+        window.speechSynthesis.speak(utterance);
+        return;
+      }
+
       const response = await fetch(`${getApiBaseUrl()}/api/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -984,37 +1022,20 @@
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       audio.preload = "auto";
-      audio.addEventListener("ended", () => {
+      const settlePlayback = () => {
         URL.revokeObjectURL(audioUrl);
-        if (
-          scriptState.activePlaybackRequestId === playbackRequestId &&
-          scriptState.activeAudio === audio
-        ) {
-          scriptState.activeAudio = null;
-        }
-      });
-      audio.addEventListener("error", () => {
-        URL.revokeObjectURL(audioUrl);
-        if (
-          scriptState.activePlaybackRequestId === playbackRequestId &&
-          scriptState.activeAudio === audio
-        ) {
-          scriptState.activeAudio = null;
-        }
-      });
+        resolvePlayback();
+      };
+      audio.addEventListener("ended", settlePlayback);
+      audio.addEventListener("error", settlePlayback);
       scriptState.activeAudio = audio;
-      audio.play().catch((error) => {
-        URL.revokeObjectURL(audioUrl);
-        console.warn("[voice-widget] audio playback failed", error);
-        if (
-          scriptState.activePlaybackRequestId === playbackRequestId &&
-          scriptState.activeAudio === audio
-        ) {
-          scriptState.activeAudio = null;
-        }
-      });
+      await audio.play();
+      const fallbackDelay = estimateSpeechDurationMs(message);
+      window.setTimeout(settlePlayback, fallbackDelay);
     } catch (error) {
       console.warn("[voice-widget] speech synthesis failed", error);
+      const fallbackDelay = estimateSpeechDurationMs(message);
+      window.setTimeout(resolvePlayback, fallbackDelay);
     }
   }
 
@@ -1165,7 +1186,7 @@
     return "Executing action...";
   }
 
-  function announceAction(actionPlan) {
+  async function announceAction(actionPlan) {
     const defaultMessage = describeActionPlan(actionPlan);
     const message = getAccessibilitySpeechText(actionPlan) || defaultMessage;
     setFeedback(defaultMessage, actionPlan);
@@ -1173,10 +1194,10 @@
     scriptState.feedbackTimer = window.setTimeout(() => {
       setFeedback(scriptState.listening ? "Listening..." : "Ready");
     }, 2200);
-    void speakReply(message);
+    await speakReply(message);
   }
 
-  function handleActionPlan(actionPlan) {
+  async function handleActionPlan(actionPlan) {
     const actionKey = `${actionPlan?.action || "NONE"}:${String(
       actionPlan?.ttsContext || actionPlan?.reasoning || "",
     ).trim()}`;
@@ -1232,7 +1253,7 @@
       return;
     }
 
-    announceAction(actionPlan);
+    await announceAction(actionPlan);
     executeActionPlan(actionPlan);
   }
 
@@ -1542,7 +1563,7 @@
   }
 
   function showActionPlan(actionPlan) {
-    handleActionPlan(actionPlan);
+    void handleActionPlan(actionPlan);
   }
 
   function submitPendingTranscript(text) {
