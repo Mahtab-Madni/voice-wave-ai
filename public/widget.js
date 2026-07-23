@@ -614,6 +614,10 @@
     stream: null,
     recognition: null,
     listening: false,
+    sessionActive: false,
+    userInitiatedStop: false,
+    processing: false,
+    suppressFlushOnStop: false,
     latestTranscript: "",
     feedbackTimer: null,
     lastProcessedTranscript: "",
@@ -629,10 +633,6 @@
     pendingFlushRequest: false,
     mediaMimeType: null,
     chunkFlushTimer: null,
-    resumeListeningTimer: null,
-    isProcessingAction: false,
-    resumeListeningAfterAction: false,
-    manualStopRequested: false,
     transcriptDispatchInFlight: new Set(),
     lastSpokenMessageKey: "",
     lastSpokenAt: 0,
@@ -830,6 +830,25 @@
         animation: voice-widget-pulse 1.5s infinite ease-in-out;
       }
 
+      #${overlayId}.is-processing button#${buttonId} {
+        background: rgba(59, 130, 246, 0.2);
+        border-color: rgba(59, 130, 246, 0.55);
+        color: #38bdf8;
+        animation: voice-widget-buffer 1.2s infinite ease-in-out;
+      }
+
+      @keyframes voice-widget-buffer {
+        0% {
+          box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+        }
+        50% {
+          box-shadow: 0 0 0 12px rgba(59, 130, 246, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+        }
+      }
+
       #${overlayId} .voice-widget-copy {
         width: 100%;
         display: flex;
@@ -900,40 +919,15 @@
     return document.getElementById(overlayId);
   }
 
-  function setControlButtonState({ icon, label, disabled, title }) {
-    const button = document.getElementById(buttonId);
-    if (!button) return;
-    button.innerHTML = `${icon}<span class="voice-widget-button-text">${label}</span>`;
-    button.disabled = Boolean(disabled);
-    button.title = title || label;
-  }
-
   function setListeningVisualState(isListening) {
     const overlay = getOverlay();
     if (!overlay) return;
     overlay.classList.toggle("is-listening", Boolean(isListening));
-    overlay.classList.toggle("is-processing", false);
 
-    setControlButtonState({
-      icon: isListening ? stopIconSvg : micIconSvg,
-      label: isListening ? "Stop" : "Start",
-      disabled: false,
-      title: isListening ? "Stop listening" : "Start listening",
-    });
-  }
-
-  function setProcessingState(isProcessing) {
-    const overlay = getOverlay();
-    if (!overlay) return;
-    overlay.classList.toggle("is-processing", Boolean(isProcessing));
-    overlay.classList.toggle("is-listening", false);
-
-    setControlButtonState({
-      icon: stopIconSvg,
-      label: isProcessing ? "Processing…" : "Start",
-      disabled: Boolean(isProcessing),
-      title: isProcessing ? "Processing command" : "Start listening",
-    });
+    const button = document.getElementById(buttonId);
+    if (button) {
+      button.innerHTML = isListening ? stopIconSvg : micIconSvg;
+    }
   }
 
   function expandWidget() {
@@ -1211,75 +1205,6 @@
     await new Promise((resolve) => window.setTimeout(resolve, 400));
   }
 
-  function clearResumeListeningTimer() {
-    if (scriptState.resumeListeningTimer) {
-      window.clearTimeout(scriptState.resumeListeningTimer);
-      scriptState.resumeListeningTimer = null;
-    }
-  }
-
-  function pauseListeningForExecution() {
-    if (scriptState.listening) {
-      scriptState.listening = false;
-    }
-
-    clearSilenceTimer();
-    clearChunkFlushTimer();
-    clearResumeListeningTimer();
-
-    if (scriptState.pendingTranscriptTimer) {
-      window.clearTimeout(scriptState.pendingTranscriptTimer);
-      scriptState.pendingTranscriptTimer = null;
-    }
-
-    if (
-      scriptState.mediaRecorder &&
-      scriptState.mediaRecorder.state !== "inactive"
-    ) {
-      try {
-        scriptState.mediaRecorder.stop();
-      } catch (error) {
-        console.warn("[voice-widget] could not stop media recorder", error);
-      }
-    }
-
-    if (scriptState.stream) {
-      try {
-        scriptState.stream.getTracks().forEach((track) => track.stop());
-      } catch (error) {
-        console.warn("[voice-widget] could not stop media stream", error);
-      }
-      scriptState.stream = null;
-    }
-
-    stopRecognition();
-    scriptState.mediaRecorder = null;
-    scriptState.isProcessingAction = true;
-    scriptState.resumeListeningAfterAction = true;
-    setListeningState(false);
-    setProcessingState(true);
-    setStatus("Processing command");
-    setFeedback("Processing command...");
-  }
-
-  function resumeListeningAfterExecution() {
-    if (
-      !scriptState.resumeListeningAfterAction ||
-      scriptState.manualStopRequested
-    )
-      return;
-
-    scriptState.resumeListeningAfterAction = false;
-    clearResumeListeningTimer();
-    scriptState.resumeListeningTimer = window.setTimeout(() => {
-      scriptState.resumeListeningTimer = null;
-      scriptState.isProcessingAction = false;
-      setProcessingState(false);
-      if (scriptState.listening) return;
-      startListening();
-    }, 900);
-  }
-
   async function handleActionPlan(actionPlan) {
     const actionKey = `${actionPlan?.action || "NONE"}:${String(
       actionPlan?.ttsContext || actionPlan?.reasoning || "",
@@ -1293,7 +1218,8 @@
       return;
     }
 
-    pauseListeningForExecution();
+    scriptState.lastHandledActionKey = actionKey;
+    scriptState.lastHandledActionAt = now;
 
     try {
       if (actionPlan.action === "RESPOND") {
@@ -1302,27 +1228,23 @@
           setFeedback(message, actionPlan);
           try {
             await speakReply(message);
-            await new Promise((resolve) => window.setTimeout(resolve, 400));
           } catch (error) {
             await speakReply(message);
-            await new Promise((resolve) => window.setTimeout(resolve, 400));
           }
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
         }
         return;
       }
-      scriptState.lastHandledActionKey = actionKey;
-      scriptState.lastHandledActionAt = now;
 
       if (!actionPlan || !actionPlan.action || actionPlan.action === "NONE") {
         const message = actionPlan?.ttsContext || "No matching action.";
         setFeedback(message, actionPlan);
         await speakReply(message);
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
         return;
       }
 
-      // Handle clarify prompts specially
       if (actionPlan.action === "CLARIFY") {
-        // Store pending clarify request
         scriptState.pendingClarify = actionPlan;
         const question =
           actionPlan.message ||
@@ -1337,7 +1259,9 @@
       await announceAction(actionPlan);
       executeActionPlan(actionPlan);
     } finally {
-      resumeListeningAfterExecution();
+      if (scriptState.processing) {
+        endProcessingCycle();
+      }
     }
   }
 
@@ -1371,14 +1295,9 @@
 
     const button = document.createElement("button");
     button.id = buttonId;
+    button.innerHTML = micIconSvg;
     button.addEventListener("click", toggleListening);
     orbContainer.appendChild(button);
-    setControlButtonState({
-      icon: micIconSvg,
-      label: "Start",
-      disabled: false,
-      title: "Start listening",
-    });
 
     const copy = document.createElement("div");
     copy.className = "voice-widget-copy";
@@ -1644,6 +1563,157 @@
     setListeningVisualState(isListening);
   }
 
+  function setProcessingState(isProcessing) {
+    const overlay = document.getElementById(overlayId);
+    if (overlay)
+      overlay.classList.toggle("is-processing", Boolean(isProcessing));
+  }
+
+  function createMediaRecorderForStream(stream) {
+    const preferredMimeType = scriptState.mediaMimeType;
+    const mediaRecorder = preferredMimeType
+      ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+      : new MediaRecorder(stream);
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (
+        event.data.size > 0 &&
+        scriptState.socket &&
+        scriptState.socket.readyState === WebSocket.OPEN
+      ) {
+        scriptState.socket.send(event.data);
+      }
+
+      if (scriptState.pendingFlushRequest) {
+        scriptState.pendingFlushRequest = false;
+        if (
+          scriptState.socket &&
+          scriptState.socket.readyState === WebSocket.OPEN
+        ) {
+          scriptState.socket.send(JSON.stringify({ type: "flush-audio" }));
+          setStatus("Processing speech...");
+        }
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      if (scriptState.suppressFlushOnStop) {
+        return;
+      }
+      if (
+        scriptState.socket &&
+        scriptState.socket.readyState === WebSocket.OPEN
+      ) {
+        scriptState.socket.send(JSON.stringify({ type: "flush-audio" }));
+      }
+    };
+
+    return mediaRecorder;
+  }
+
+  function startMediaRecorder() {
+    if (!scriptState.stream || !scriptState.socket) return;
+    if (
+      scriptState.mediaRecorder &&
+      scriptState.mediaRecorder.state === "recording"
+    ) {
+      return;
+    }
+
+    scriptState.mediaRecorder = createMediaRecorderForStream(
+      scriptState.stream,
+    );
+    if (!scriptState.mediaMimeType) {
+      scriptState.mediaMimeType = scriptState.mediaRecorder.mimeType;
+    }
+    if (
+      scriptState.socket &&
+      scriptState.socket.readyState === WebSocket.OPEN &&
+      scriptState.mediaMimeType
+    ) {
+      scriptState.socket.send(
+        JSON.stringify({
+          type: "media-type",
+          mimeType: scriptState.mediaMimeType,
+        }),
+      );
+    }
+
+    try {
+      scriptState.mediaRecorder.start();
+    } catch (error) {
+      console.error("[voice-widget] failed to start media recorder", error);
+      return;
+    }
+
+    scriptState.listening = true;
+    scriptState.pendingFlushRequest = false;
+    scriptState.lastVoiceActivityAt = performance.now();
+    startChunkFlushLoop();
+    setStatus("Listening");
+    setListeningState(true);
+    setFeedback("Streaming audio...");
+  }
+
+  function pauseAudioCapture() {
+    clearSilenceTimer();
+    clearChunkFlushTimer();
+    if (
+      scriptState.mediaRecorder &&
+      scriptState.mediaRecorder.state !== "inactive"
+    ) {
+      scriptState.suppressFlushOnStop = true;
+      try {
+        scriptState.mediaRecorder.stop();
+      } catch (error) {
+        console.warn("[voice-widget] error stopping media recorder", error);
+      }
+      scriptState.mediaRecorder = null;
+      scriptState.suppressFlushOnStop = false;
+    }
+    scriptState.listening = false;
+    setListeningState(false);
+  }
+
+  function resumeAudioCapture() {
+    if (!scriptState.sessionActive || scriptState.userInitiatedStop) return;
+    if (!scriptState.stream) return;
+    if (
+      scriptState.mediaRecorder &&
+      scriptState.mediaRecorder.state === "recording"
+    ) {
+      return;
+    }
+    if (!scriptState.audioContext) {
+      setupAudioMonitoring(scriptState.stream);
+    }
+    startMediaRecorder();
+  }
+
+  function beginProcessingCycle() {
+    if (scriptState.processing) return;
+    scriptState.processing = true;
+    setProcessingState(true);
+    setStatus("Processing command...");
+    setFeedback("Processing command...");
+    pauseAudioCapture();
+  }
+
+  function endProcessingCycle() {
+    scriptState.processing = false;
+    setProcessingState(false);
+    if (scriptState.userInitiatedStop) {
+      setStatus("Stopped");
+      setFeedback("Stopped listening.");
+      return;
+    }
+    if (scriptState.sessionActive && !scriptState.listening) {
+      resumeAudioCapture();
+      return;
+    }
+    setFeedback(scriptState.listening ? "Listening..." : "Ready");
+  }
+
   function normalizeTranscriptKey(text) {
     return String(text || "")
       .toLowerCase()
@@ -1656,7 +1726,7 @@
   }
 
   function submitPendingTranscript(text) {
-    if (!text || scriptState.manualStopRequested) return;
+    if (!text) return;
     const trimmedText = String(text).trim();
     if (!trimmedText) return;
     const transcriptKey = normalizeTranscriptKey(trimmedText);
@@ -1746,6 +1816,7 @@
       }
       // If not resolved, continue to send as normal transcript
     }
+    beginProcessingCycle();
     if (
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
@@ -1789,6 +1860,7 @@
       showActionPlan(actionPlan);
     } catch (error) {
       console.error("[voice-widget] failed to submit intent payload", error);
+      endProcessingCycle();
     }
   }
 
@@ -2126,13 +2198,14 @@
   }
 
   function startListening() {
-    scriptState.manualStopRequested = false;
-
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setStatus("Microphone API unsupported");
       return;
     }
 
+    scriptState.sessionActive = true;
+    scriptState.userInitiatedStop = false;
+    scriptState.processing = false;
     openSocket();
     navigator.mediaDevices
       .getUserMedia({ audio: true })
@@ -2215,26 +2288,12 @@
         startChunkFlushLoop();
         setStatus("Listening");
         setListeningState(true);
-        setProcessingState(false);
         setFeedback("Streaming audio...");
       })
       .catch((error) => {
         console.error("[voice-widget] microphone access denied", error);
         setStatus("Microphone access denied");
-        setListeningState(false);
-        setProcessingState(false);
       });
-  }
-
-  function closeSocket() {
-    if (scriptState.socket) {
-      try {
-        scriptState.socket.close();
-      } catch (error) {
-        console.warn("[voice-widget] could not close socket", error);
-      }
-      scriptState.socket = null;
-    }
   }
 
   function stopListening() {
@@ -2243,10 +2302,10 @@
     const elements = domHandler.prepareContext(rawElements);
 
     scriptState.listening = false;
-    scriptState.isProcessingAction = false;
-    scriptState.resumeListeningAfterAction = false;
-    scriptState.manualStopRequested = true;
-    clearResumeListeningTimer();
+    scriptState.sessionActive = false;
+    scriptState.userInitiatedStop = true;
+    scriptState.processing = false;
+    setProcessingState(false);
     clearSilenceTimer();
     clearChunkFlushTimer();
     if (scriptState.pendingTranscriptTimer) {
@@ -2257,31 +2316,26 @@
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state !== "inactive"
     ) {
-      try {
-        scriptState.mediaRecorder.stop();
-      } catch (error) {
-        console.warn("[voice-widget] could not stop media recorder", error);
-      }
+      scriptState.mediaRecorder.stop();
     }
     if (scriptState.stream) {
-      try {
-        scriptState.stream.getTracks().forEach((track) => track.stop());
-      } catch (error) {
-        console.warn("[voice-widget] could not stop media stream", error);
-      }
+      scriptState.stream.getTracks().forEach((track) => track.stop());
       scriptState.stream = null;
     }
     stopRecognition();
     setListeningState(false);
-    setProcessingState(false);
 
-    closeSocket();
+    if (
+      scriptState.socket &&
+      scriptState.socket.readyState === WebSocket.OPEN
+    ) {
+      scriptState.socket.close();
+    }
+    scriptState.socket = null;
 
-    // Do not dispatch a pending transcript when the user manually stops.
-    // The stop button should terminate audio capture immediately.
-    if (false && transcript) {
+    if (transcript) {
       submitPendingTranscript(transcript);
-    } else if (false && elements.length) {
+    } else if (elements.length) {
       if (
         scriptState.socket &&
         scriptState.socket.readyState === WebSocket.OPEN

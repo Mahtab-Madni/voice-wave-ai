@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import { WebSocketServer } from "ws";
-import { buildActionPlan, summarizeConversationContext } from "./planner.js";
+import { buildActionPlan } from "./planner.js";
 import { appendChunk, clearAudioChunk } from "./audioSession.js";
 import Project from "../models/Project.js";
 import InteractionLog from "../models/InteractionLog.js";
@@ -33,6 +33,26 @@ function getDeepgramApiKey(config = {}, keyRotator = null) {
   );
 
   return apiKeys[0] ? String(apiKeys[0]).trim() : "";
+}
+
+function buildConversationSummary(conversationContext = []) {
+  if (!Array.isArray(conversationContext) || conversationContext.length === 0) {
+    return "";
+  }
+
+  return conversationContext
+    .slice(-6)
+    .map((entry) => {
+      const transcript = String(entry?.transcript || "").trim();
+      const action = String(entry?.action || "").trim();
+      const ttsContext = String(entry?.ttsContext || "").trim();
+      const parts = [];
+      if (transcript) parts.push(`User: ${transcript}`);
+      if (action) parts.push(`Assistant action: ${action}`);
+      if (ttsContext) parts.push(`Assistant response: ${ttsContext}`);
+      return parts.join(" | ");
+    })
+    .join("\n");
 }
 
 function getSession(sessions, clientId, socket) {
@@ -215,9 +235,8 @@ export function setupVoiceWebSocket(server, config = {}) {
             {
               ...config,
               projectConfig,
-              conversationContext: summarizeConversationContext(
+              conversationContext: buildConversationSummary(
                 session.conversationContext,
-                6,
               ),
               sessionId: clientId,
             },
@@ -239,9 +258,8 @@ export function setupVoiceWebSocket(server, config = {}) {
                 success: Boolean(action?.action && action.action !== "NONE"),
                 confidence: Number(action?.confidence || 0),
                 sessionId: clientId,
-                conversationContext: summarizeConversationContext(
+                conversationContext: buildConversationSummary(
                   session.conversationContext,
-                  6,
                 ),
                 ttsContext: action?.ttsContext || "",
                 metadata: {
