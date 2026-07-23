@@ -76,6 +76,9 @@ function scheduleTranscription(session, config, keyRotator = null) {
   if (session.flushTimer) {
     clearTimeout(session.flushTimer);
   }
+  // This debounce is a fallback. In practice, the browser-side silence path is the
+  // effective trigger while audio keeps arriving, because the client sends a
+  // flush-audio message once the analyser detects a quiet period.
   session.flushTimer = setTimeout(async () => {
     session.flushTimer = null;
     const text = await transcribeAudio(session, config, keyRotator);
@@ -147,7 +150,11 @@ async function transcribeAudio(session, config, keyRotator = null) {
     );
     try {
       session.socket.send(
-        JSON.stringify({ type: "drop", reason: "no-ebml", bytes: audioBuffer.length }),
+        JSON.stringify({
+          type: "drop",
+          reason: "no-ebml",
+          bytes: audioBuffer.length,
+        }),
       );
     } catch (e) {}
     // Clear buffered chunks and retry counter for safety
@@ -167,7 +174,11 @@ async function transcribeAudio(session, config, keyRotator = null) {
     );
     try {
       session.socket.send(
-        JSON.stringify({ type: "drop", reason: "too-small", bytes: payload.length }),
+        JSON.stringify({
+          type: "drop",
+          reason: "too-small",
+          bytes: payload.length,
+        }),
       );
     } catch (e) {}
     clearAudioChunk(session);
@@ -205,7 +216,12 @@ async function transcribeAudio(session, config, keyRotator = null) {
     );
     try {
       session.socket.send(
-        JSON.stringify({ type: "drop", reason: "transcription-failed", status: response.status, detail }),
+        JSON.stringify({
+          type: "drop",
+          reason: "transcription-failed",
+          status: response.status,
+          detail,
+        }),
       );
     } catch (e) {}
     // Clear chunks on failure to avoid repeated failing payloads
@@ -246,6 +262,8 @@ export function setupVoiceWebSocket(server, config = {}) {
     socket.on("message", async (data, isBinary) => {
       if (isBinary) {
         appendChunk(session, data);
+        // Chunk arrivals reset the debounce timer, but the actual transcription
+        // trigger is the client-side silence flush path that emits flush-audio.
         scheduleTranscription(session, config, deepgramKeyRotator);
         console.debug("[ws] received audio chunk", {
           latestSize: data.byteLength || data.length || 0,

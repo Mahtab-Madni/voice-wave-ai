@@ -1931,7 +1931,10 @@
           if (payload && payload.type === "welcome") {
             setStatus(payload.message || "Connected");
           } else if (payload && payload.type === "transcript") {
-            // Ignore incoming transcripts while processing an existing command
+            // Deepgram returns transcript text to the browser first, then the widget
+            // re-sends it as an intent payload to the server for planning.
+            // Ignore incoming transcripts while processing an existing command so
+            // the client does not queue overlapping turns.
             if (scriptState.processing) {
               console.debug(
                 "[voice-widget] ignoring websocket transcript while processing",
