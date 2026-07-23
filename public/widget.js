@@ -1671,6 +1671,7 @@
   function pauseAudioCapture() {
     clearSilenceTimer();
     clearChunkFlushTimer();
+    stopAudioMonitoring();
     if (
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state !== "inactive"
@@ -1739,6 +1740,12 @@
   }
 
   function submitPendingTranscript(text) {
+    if (scriptState.processing) {
+      console.debug(
+        "[voice-widget] submitPendingTranscript ignored: already processing",
+      );
+      return;
+    }
     if (!text) return;
     const trimmedText = String(text).trim();
     if (!trimmedText) return;
@@ -1924,10 +1931,17 @@
           if (payload && payload.type === "welcome") {
             setStatus(payload.message || "Connected");
           } else if (payload && payload.type === "transcript") {
-            const transcript = String(payload.text || "").trim();
-            setStatus(`Transcribed: ${transcript}`);
-            if (transcript) {
-              submitPendingTranscript(transcript);
+            // Ignore incoming transcripts while processing an existing command
+            if (scriptState.processing) {
+              console.debug(
+                "[voice-widget] ignoring websocket transcript while processing",
+              );
+            } else {
+              const transcript = String(payload.text || "").trim();
+              setStatus(`Transcribed: ${transcript}`);
+              if (transcript) {
+                submitPendingTranscript(transcript);
+              }
             }
           } else if (payload && payload.type === "drop") {
             console.warn(
@@ -2002,6 +2016,12 @@
       if (finalText) {
         const text = finalText.trim();
         if (!text) return;
+        if (scriptState.processing) {
+          console.debug(
+            "[voice-widget] recognition finalText ignored: already processing",
+          );
+          return;
+        }
         if (
           scriptState.pendingTranscriptTimer &&
           scriptState.latestTranscript === text
@@ -2213,11 +2233,12 @@
       scriptState.lastVoiceActivityAt = performance.now();
 
       const monitorAudioActivity = () => {
-        if (
-          !scriptState.listening ||
-          !scriptState.analyser ||
-          !scriptState.analyserBuffer
-        ) {
+        if (!scriptState.analyser || !scriptState.analyserBuffer) {
+          return;
+        }
+        if (!scriptState.listening) {
+          scriptState.audioActivityFrame =
+            window.requestAnimationFrame(monitorAudioActivity);
           return;
         }
 
@@ -2348,6 +2369,9 @@
         };
 
         scriptState.mediaRecorder.onstop = () => {
+          if (scriptState.suppressFlushOnStop) {
+            return;
+          }
           if (
             scriptState.socket &&
             scriptState.socket.readyState === WebSocket.OPEN

@@ -23,3 +23,12 @@ test("widget uses API-based TTS and no longer relies on browser speech synthesis
   assert.match(widgetSource, /api\/tts/);
   assert.doesNotMatch(widgetSource, /speechSynthesis/);
 });
+
+test("widget tears down the audio monitor during pause and rebuilds it on resume", () => {
+  assert.match(widgetSource, /function pauseAudioCapture\(\) \{/);
+  assert.match(widgetSource, /stopAudioMonitoring\(\);/);
+  assert.match(
+    widgetSource,
+    /if \(!scriptState\.analyser \|\| !scriptState\.analyserBuffer\) \{\s*return;\s*\}/,
+  );
+});
