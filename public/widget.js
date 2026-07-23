@@ -2103,24 +2103,50 @@
         pendingFlushRequest: scriptState.pendingFlushRequest,
       });
       try {
-        // Send cached init chunk first if available and not recently sent
+        // Stop & restart the MediaRecorder to force emission of a fresh init chunk
+        // suppressFlushOnStop prevents the onstop handler from sending an extra flush
+        scriptState.suppressFlushOnStop = true;
         try {
-          const now = Date.now();
-          if (
-            scriptState.initChunk &&
-            scriptState.socket &&
-            scriptState.socket.readyState === WebSocket.OPEN &&
-            now - (scriptState.initChunkLastSentAt || 0) > 300
-          ) {
-            try {
-              scriptState.socket.send(scriptState.initChunk);
-              scriptState.initChunkLastSentAt = now;
-            } catch (e) {
-              // ignore send errors
-            }
+          scriptState.mediaRecorder.stop();
+        } catch (e) {
+          console.warn("[voice-widget] mediaRecorder.stop() failed", e);
+        }
+        scriptState.mediaRecorder = null;
+
+        // Restart shortly after to resume streaming and emit init segment
+        setTimeout(() => {
+          try {
+            startMediaRecorder();
+            // allow recorder to initialize before requesting data
+            setTimeout(() => {
+              try {
+                // send cached initChunk if we have it
+                const now = Date.now();
+                if (
+                  scriptState.initChunk &&
+                  scriptState.socket &&
+                  scriptState.socket.readyState === WebSocket.OPEN &&
+                  now - (scriptState.initChunkLastSentAt || 0) > 300
+                ) {
+                  try {
+                    scriptState.socket.send(scriptState.initChunk);
+                    scriptState.initChunkLastSentAt = now;
+                  } catch (e) {}
+                }
+                if (
+                  scriptState.mediaRecorder &&
+                  typeof scriptState.mediaRecorder.requestData === "function"
+                ) {
+                  scriptState.mediaRecorder.requestData();
+                }
+              } catch (e) {}
+            }, 120);
+          } catch (e) {
+            console.warn("[voice-widget] restart media recorder failed", e);
+          } finally {
+            scriptState.suppressFlushOnStop = false;
           }
-        } catch (e) {}
-        scriptState.mediaRecorder.requestData();
+        }, 80);
         return;
       } catch (error) {
         scriptState.pendingFlushRequest = false;
