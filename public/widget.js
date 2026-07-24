@@ -636,6 +636,7 @@
     pendingAudioControlState: null,
     audioControlState: "idle",
     transcriptDispatchInFlight: new Set(),
+    transcriptionMode: "browser",
     lastSpokenMessageKey: "",
     lastSpokenAt: 0,
     activeAudio: null,
@@ -1600,6 +1601,15 @@
       overlay.classList.toggle("is-processing", Boolean(isProcessing));
   }
 
+  function getSpeechRecognitionConstructor() {
+    if (typeof window === "undefined") return null;
+    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  }
+
+  function isSpeechRecognitionAvailable() {
+    return Boolean(getSpeechRecognitionConstructor());
+  }
+
   function createMediaRecorderForStream(stream) {
     const preferredMimeType = scriptState.mediaMimeType;
     const mediaRecorder = preferredMimeType
@@ -1709,6 +1719,14 @@
     scriptState.audioControlState = "pause";
     sendSocketPayload({ type: "audio-control", state: "pause" });
     clearSilenceTimer();
+
+    if (scriptState.transcriptionMode === "browser") {
+      stopRecognition();
+      scriptState.listening = false;
+      setListeningState(false);
+      return;
+    }
+
     if (
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state !== "inactive"
@@ -1731,6 +1749,17 @@
     if (!scriptState.stream) return;
     scriptState.audioControlState = "resume";
     sendSocketPayload({ type: "audio-control", state: "resume" });
+
+    if (scriptState.transcriptionMode === "browser") {
+      const restarted = startRecognition();
+      if (restarted) {
+        scriptState.listening = true;
+        setListeningState(true);
+        setStatus("Listening");
+      }
+      return;
+    }
+
     if (
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state === "recording"
@@ -2043,83 +2072,122 @@
   }
 
   function startRecognition() {
-    if (
-      !("SpeechRecognition" in window || "webkitSpeechRecognition" in window)
-    ) {
+    const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
+    if (!SpeechRecognitionCtor) {
       console.warn(
         "[voice-widget] Web Speech API engine not available in browser native context",
       );
-      return;
+      scriptState.transcriptionMode = "fallback";
+      return false;
     }
 
-    const SpeechRecognitionCtor =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognitionCtor();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-
-    recognition.onresult = (event) => {
-      let interimText = "";
-      let finalText = "";
-      for (
-        let index = event.resultIndex;
-        index < event.results.length;
-        index += 1
-      ) {
-        const result = event.results[index];
-        const transcript = result[0].transcript;
-        if (result.isFinal) {
-          finalText += ` ${transcript}`.trim();
-        } else {
-          interimText += ` ${transcript}`.trim();
-        }
+    if (scriptState.recognition) {
+      try {
+        scriptState.recognition.abort?.();
+      } catch (error) {
+        console.warn("[voice-widget] failed to abort prior recognition", error);
       }
-      if (finalText) {
-        const text = finalText.trim();
-        if (!text) return;
-        if (scriptState.processing) {
-          console.debug(
-            "[voice-widget] recognition finalText ignored: already processing",
-          );
-          return;
-        }
-        if (
-          scriptState.pendingTranscriptTimer &&
-          scriptState.latestTranscript === text
+      try {
+        scriptState.recognition.stop?.();
+      } catch (error) {
+        console.warn("[voice-widget] failed to stop prior recognition", error);
+      }
+      scriptState.recognition = null;
+    }
+
+    if (scriptState.pendingTranscriptTimer) {
+      window.clearTimeout(scriptState.pendingTranscriptTimer);
+      scriptState.pendingTranscriptTimer = null;
+    }
+    scriptState.latestTranscript = "";
+    scriptState.lastProcessedTranscript = "";
+    scriptState.lastProcessedTranscriptKey = "";
+
+    try {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event) => {
+        let interimText = "";
+        let finalText = "";
+        for (
+          let index = event.resultIndex;
+          index < event.results.length;
+          index += 1
         ) {
+          const result = event.results[index];
+          const transcript = result[0].transcript;
+          if (result.isFinal) {
+            finalText += ` ${transcript}`.trim();
+          } else {
+            interimText += ` ${transcript}`.trim();
+          }
+        }
+        if (finalText) {
+          const text = finalText.trim();
+          if (!text) return;
+          if (scriptState.processing) {
+            console.debug(
+              "[voice-widget] recognition finalText ignored: already processing",
+            );
+            return;
+          }
+          if (
+            scriptState.pendingTranscriptTimer &&
+            scriptState.latestTranscript === text
+          ) {
+            window.clearTimeout(scriptState.pendingTranscriptTimer);
+          }
+          scriptState.latestTranscript = text;
+          setStatus(`Transcript: ${text}`);
+          setFeedback(`Transcript: ${text}`);
+          if (
+            scriptState.socket &&
+            scriptState.socket.readyState === WebSocket.OPEN
+          ) {
+            scriptState.socket.send(
+              JSON.stringify({ type: "transcript", text, isFinal: true }),
+            );
+          }
           window.clearTimeout(scriptState.pendingTranscriptTimer);
+          scriptState.pendingTranscriptTimer = window.setTimeout(() => {
+            submitPendingTranscript(text);
+          }, 650);
         }
-        scriptState.latestTranscript = text;
-        setStatus(`Heard: ${text}`);
+        if (interimText) {
+          setStatus(`Listening: ${interimText}`);
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.warn("[voice-widget] recognition error", event.error);
+        setStatus(`Recognition error: ${event.error}`);
+      };
+
+      recognition.onend = () => {
         if (
-          scriptState.socket &&
-          scriptState.socket.readyState === WebSocket.OPEN
+          scriptState.listening &&
+          scriptState.transcriptionMode === "browser"
         ) {
-          scriptState.socket.send(
-            JSON.stringify({ type: "transcript", text, isFinal: true }),
-          );
+          try {
+            recognition.start();
+          } catch (error) {
+            console.warn("[voice-widget] failed to restart recognition", error);
+          }
         }
-        window.clearTimeout(scriptState.pendingTranscriptTimer);
-        scriptState.pendingTranscriptTimer = window.setTimeout(() => {
-          submitPendingTranscript(text);
-        }, 650);
-      }
-      if (interimText) {
-        setStatus(`Listening: ${interimText}`);
-      }
-    };
+      };
 
-    recognition.onerror = (event) => {
-      setStatus(`Recognition error: ${event.error}`);
-    };
-
-    recognition.onend = () => {
-      if (scriptState.listening) recognition.start();
-    };
-
-    scriptState.recognition = recognition;
-    recognition.start();
+      scriptState.transcriptionMode = "browser";
+      scriptState.recognition = recognition;
+      recognition.start();
+      return true;
+    } catch (error) {
+      console.warn("[voice-widget] failed to start recognition", error);
+      scriptState.transcriptionMode = "fallback";
+      return false;
+    }
   }
 
   function clearSilenceTimer() {
@@ -2292,9 +2360,21 @@
     clearSilenceTimer();
     stopAudioMonitoring();
     if (scriptState.recognition) {
-      scriptState.recognition.stop();
+      try {
+        scriptState.recognition.abort?.();
+      } catch (error) {
+        console.warn("[voice-widget] failed to abort recognition", error);
+      }
+      try {
+        scriptState.recognition.stop?.();
+      } catch (error) {
+        console.warn("[voice-widget] failed to stop recognition", error);
+      }
       scriptState.recognition = null;
     }
+    scriptState.latestTranscript = "";
+    scriptState.lastProcessedTranscript = "";
+    scriptState.lastProcessedTranscriptKey = "";
   }
 
   function startListening() {
@@ -2313,9 +2393,20 @@
       .getUserMedia({ audio: true })
       .then((stream) => {
         scriptState.stream = stream;
-        // Delegate actual MediaRecorder creation/wiring to the same helper
-        // resumeAudioCapture() uses for every subsequent turn, so the
-        // initial start and every auto-resumed turn behave identically.
+        setupAudioMonitoring(stream);
+
+        if (isSpeechRecognitionAvailable()) {
+          const recognitionStarted = startRecognition();
+          if (recognitionStarted) {
+            scriptState.listening = true;
+            setListeningState(true);
+            setStatus("Listening");
+            setFeedback("Listening with browser speech...");
+            return;
+          }
+        }
+
+        scriptState.transcriptionMode = "fallback";
         startMediaRecorder();
       })
       .catch((error) => {
