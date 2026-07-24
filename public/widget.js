@@ -2204,6 +2204,16 @@
       recognition.onerror = (event) => {
         console.warn("[voice-widget] recognition error", event.error);
         setStatus(`Recognition error: ${event.error}`);
+        if (
+          scriptState.listening &&
+          scriptState.transcriptionMode === "browser" &&
+          scriptState.recognition === recognition &&
+          scriptState.recognitionSessionId === recognitionSessionId
+        ) {
+          scriptState.listening = false;
+          setListeningState(false);
+          setFeedback("Speech recognition failed. Click mic to try again.");
+        }
       };
 
       recognition.onend = () => {
@@ -2225,7 +2235,14 @@
 
       scriptState.transcriptionMode = "browser";
       scriptState.recognition = recognition;
-      recognition.start();
+      try {
+        recognition.start();
+      } catch (error) {
+        console.warn("[voice-widget] failed to start recognition", error);
+        scriptState.recognition = null;
+        scriptState.transcriptionMode = "fallback";
+        return false;
+      }
       return true;
     } catch (error) {
       console.warn("[voice-widget] failed to start recognition", error);
@@ -2435,6 +2452,9 @@
     scriptState.userInitiatedStop = false;
     scriptState.processing = false;
     openSocket();
+    setListeningState(false);
+    setStatus("Requesting microphone access...");
+    setFeedback("Requesting microphone access...");
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then((stream) => {
@@ -2457,7 +2477,10 @@
       })
       .catch((error) => {
         console.error("[voice-widget] microphone access denied", error);
+        scriptState.listening = false;
+        setListeningState(false);
         setStatus("Microphone access denied");
+        setFeedback("Microphone access denied. Please allow access and try again.");
       });
   }
 
