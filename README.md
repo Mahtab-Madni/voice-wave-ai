@@ -31,17 +31,21 @@ In practice, this means the system can help with tasks such as:
 
 ## Recently added capabilities
 
-The latest version adds a few important reliability and intelligence upgrades:
+The latest version adds several reliability, latency, and intelligence upgrades:
 
-- Round-robin API key rotation for Deepgram STT, Groq LLM planning, and Speechify TTS using comma-separated values in the environment.
+- Round-robin API key rotation for speech, LLM planning, and TTS using comma-separated values in the environment.
 - Session-based conversational memory for websocket conversations so follow-up commands such as “click it again” or “click the second button” can be disambiguated using recent turns.
 - Persistent interaction logging in MongoDB, including the transcript, selected action, confidence, session ID, conversational context, and generated TTS context.
 
 Additional intelligence and UX improvements in this release:
 
-- **Informational LLM Responses (`RESPOND`)**: The planner can now return an informational `RESPOND` action (no DOM interaction) with a concise `message` and optional `ttsContext` for spoken summaries (useful for "What does this form require?" queries).
+- **Fast-path direct-match execution**: If a spoken command clearly matches an on-screen button or link label, the widget can execute it immediately on the client without waiting for the backend LLM.
+- **Low-latency spoken replies**: Short spoken acknowledgements use the browser speech synthesis path first, with fallback to the TTS API for longer responses.
+- **Project-aware informational responses**: Questions such as “What is my project about?” or “Introduce yourself” now return a direct spoken answer grounded in the current project name and description.
+- **Informational LLM Responses (`RESPOND`)**: The planner can return an informational `RESPOND` action (no DOM interaction) with a concise `message` and optional `ttsContext` for spoken summaries (useful for "What does this form require?" queries).
 - **Clarification Flow (`CLARIFY`)**: When a command is ambiguous, the planner emits `CLARIFY` with `clarifyOptions` (labels + selectors). The widget presents choices to the user and executes the selected option in a follow-up turn.
 - **Structured table/grid extraction + numeric parsing**: The widget extracts structured `tables` and `grids` payloads and parses numeric cell values (numbers, percents, currencies) so the planner can reason with typed numeric values for comparisons and sorting.
+- **DOM pruning and candidate filtering**: The widget only sends a compact, interactive subset of the page to the planner, prioritizing visible controls and trimming payload size to keep routing fast and cost-effective.
 - **Overlay & modal dismissal**: The widget includes safe overlay/modal dismissal helpers that the client can call before attempting interactions, reducing blocked clicks and improving reliability.
 - **Voice-driven navigation and richer clarification flows**: Improved routing synonyms and planner guidance to handle navigation, index-based selections ("second", "last"), and conversational follow-ups.
 
@@ -93,6 +97,8 @@ Typical commands might look like:
 - “Summarize this product description”
 - “Select Credit Card from payment method dropdown”
 - “Go to the contact page”
+- “What is my project about?”
+- “Introduce yourself”
 
 ## Automation Features
 
@@ -145,15 +151,15 @@ User voice
 └─────────────────────────────────────┘
    │
    ▼
-Browser widget (mic + DOM context)
+Browser widget (mic + DOM pruning + fast-path routing)
    │
    ▼
-Deepgram speech-to-text transcription
+Browser speech recognition (primary runtime) / optional server transcription
    │
    ▼
-Intent planner (LLM + page/project context + session conversation memory)
+Intent planner (LLM + page/project context + session memory)
    │
-   ├─> Browser action execution (17 actions)
+   ├─> Browser action execution (17+ actions)
    │
    └─> TTS response generation
          │
@@ -161,7 +167,7 @@ Intent planner (LLM + page/project context + session conversation memory)
    Session-aware conversational context + MongoDB interaction logs
          │
          ▼
-      Speechify voice reply
+   Speech reply (local short speech first, API fallback for longer replies)
 ```
 
 ### End-to-end voice pipeline (current implementation)
@@ -379,9 +385,13 @@ The current implementation is strongest in:
 - browser-side voice input with amplitude monitoring
 - real-time noise cancellation via silence detection
 - intelligent audio chunking and buffer management
-- comprehensive page context extraction (40+ interactive elements)
+- aggressive DOM pruning to keep only interactive, visible, and relevant controls
+- viewport-aware candidate prioritization for large or long pages
+- fast-path local execution for obvious direct text matches
+- low-latency short-form spoken replies via browser speech synthesis
+- project-aware informational answers for questions about the current project
 - advanced intent planning using project metadata and semantic signals
-- 17 distinct automation actions across navigation, forms, mouse, and accessibility
+- 17+ distinct automation actions across navigation, forms, mouse, and accessibility
 - spoken confirmation after an action is performed
 - spatial element matching with directional tie-breaking
 - context-aware element selection using parent container labels
