@@ -981,6 +981,22 @@
     return Math.max(900, wordCount * 250 + 600);
   }
 
+  function getFastPathActionPlan(transcript, elements = []) {
+    const plan = domParser?.buildExecutionPlan?.(transcript, elements);
+    if (!plan || !plan.action || plan.action === "NONE") return null;
+
+    const action = String(plan.action || "").toUpperCase();
+    const reason = String(plan.reason || "").toLowerCase();
+    const confidence = plan.confidence;
+    const isDirectTextClick =
+      action === "CLICK" &&
+      (confidence === "high" ||
+        reason.includes("matched by text") ||
+        reason.includes("matched direct"));
+
+    return isDirectTextClick ? plan : null;
+  }
+
   async function speakReply(text) {
     const message = String(text || "").trim();
     if (!message) return;
@@ -1021,6 +1037,31 @@
     const resolvePlayback = () => {
       finalizePlayback();
     };
+
+    const canUseLocalSpeech =
+      typeof window !== "undefined" &&
+      typeof window.speechSynthesis !== "undefined" &&
+      typeof window.SpeechSynthesisUtterance === "function" &&
+      message.length <= 90;
+
+    if (canUseLocalSpeech) {
+      try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(message);
+        utterance.lang = "en-US";
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+
+        await new Promise((resolve) => {
+          utterance.onend = () => resolve();
+          utterance.onerror = () => resolve();
+          window.speechSynthesis.speak(utterance);
+        });
+        return;
+      } catch (error) {
+        console.warn("[voice-widget] local speech synthesis failed", error);
+      }
+    }
 
     try {
       const response = await fetch(`${getApiBaseUrl()}/api/tts`, {
@@ -2077,6 +2118,7 @@
     const trimmedText = String(text).trim();
     if (!trimmedText) return;
     const transcriptKey = normalizeTranscriptKey(trimmedText);
+    scriptState.lastLatencyStartAt = performance.now();
     if (scriptState.lastProcessedTranscriptKey === transcriptKey) return;
 
     scriptState.latestTranscript = trimmedText;
@@ -2142,6 +2184,17 @@
         scriptState.pendingClarify = null;
       }
     }
+    const fastPathPlan = getFastPathActionPlan(trimmedText, elements);
+    if (fastPathPlan) {
+      console.debug(
+        "[voice-widget] using fast-path direct match",
+        fastPathPlan,
+      );
+      beginProcessingCycle();
+      showActionPlan(fastPathPlan);
+      return;
+    }
+
     beginProcessingCycle();
     if (
       scriptState.socket &&
@@ -2163,6 +2216,7 @@
 
   async function postIntentToBackend(transcript, elements) {
     const endpoint = `${getApiBaseUrl()}/api/process-intent`;
+    const startedAt = scriptState.lastLatencyStartAt || performance.now();
     try {
       const response = await fetch(endpoint, {
         method: "POST",
@@ -2179,6 +2233,11 @@
       const data = await response.json().catch(() => ({}));
       const actionPlan =
         data?.action || domParser.buildExecutionPlan(transcript, elements);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      console.info(
+        `[voice-widget] end-to-end latency ${elapsedMs}ms for "${transcript}"`,
+        actionPlan,
+      );
       console.log(
         "[voice-widget] intent execution pipeline data payload:",
         data,

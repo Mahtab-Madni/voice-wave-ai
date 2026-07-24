@@ -1153,6 +1153,22 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     .slice(0, 20);
 
   const fallback = buildRuleBasedActionPlan(transcript, elements, options);
+
+  const projectContextResponse = buildProjectContextResponse(
+    transcript,
+    options?.projectConfig || options?.projectContext || options?.context || {},
+  );
+  if (projectContextResponse) {
+    return {
+      ...fallback,
+      action: "RESPOND",
+      message: projectContextResponse,
+      ttsContext: projectContextResponse,
+      confidence: 0.96,
+      reasoning: "Used project context for an informational response.",
+    };
+  }
+
   const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
     GROQ_API_KEY: options.apiKey,
   });
