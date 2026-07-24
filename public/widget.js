@@ -1098,6 +1098,40 @@
     return String(label || "").trim();
   }
 
+  function getVisibleTextFromElement(element) {
+    if (!element || typeof element !== "object") return "";
+
+    const candidates = [
+      element.getAttribute?.("aria-label"),
+      element.getAttribute?.("title"),
+      element.getAttribute?.("placeholder"),
+      element.innerText,
+      element.textContent,
+      element.value,
+    ];
+
+    for (const candidate of candidates) {
+      const text = String(candidate || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text && text.length > 1) {
+        return text;
+      }
+    }
+
+    return "";
+  }
+
+  function summarizeVisibleText(text) {
+    const cleaned = String(text || "")
+      .replace(/\s+/g, " ")
+      .replace(/\.+/g, ".")
+      .trim();
+    if (!cleaned) return "";
+    if (cleaned.length <= 320) return cleaned;
+    return `${cleaned.slice(0, 320).trimEnd()}...`;
+  }
+
   function getAccessibilitySpeechText(actionPlan) {
     if (!actionPlan || !actionPlan.action) return "";
 
@@ -1107,22 +1141,16 @@
 
     if (actionPlan.action === "READ_TEXT") {
       const target = actionPlan.target
-        ? document.querySelector(actionPlan.target)
+        ? resolveActionTarget(actionPlan.target)
         : null;
-      const text =
-        target?.innerText?.trim() ||
-        target?.textContent?.trim() ||
-        target?.getAttribute("aria-label") ||
-        target?.getAttribute("title") ||
-        "";
-      if (text) return String(text).trim();
+      const text = getVisibleTextFromElement(target);
+      if (text) return summarizeVisibleText(text);
     }
 
     if (actionPlan.action === "SUMMARIZE_PAGE") {
-      const text = document.body?.innerText?.trim() || "";
+      const text = getVisibleTextFromElement(document.body);
       if (text) {
-        const preview = String(text).trim();
-        return `Summary: ${preview.slice(0, 1400)}`;
+        return `Summary: ${summarizeVisibleText(text)}`;
       }
     }
 
@@ -1429,6 +1457,61 @@
     window.__CURRENT_ZOOM_LEVEL__ = 1.0;
   }
 
+  function resolveActionTarget(selector) {
+    if (!selector) return null;
+    if (typeof selector !== "string") return null;
+
+    const trimmed = selector.trim();
+    if (!trimmed) return null;
+
+    try {
+      const directTarget = document.querySelector(trimmed);
+      if (directTarget) return directTarget;
+    } catch (error) {
+      console.warn("[voice-widget] failed to resolve direct selector", error);
+    }
+
+    const fallbackSelectors = [
+      trimmed,
+      trimmed.replace(/\s*>\s*/g, " "),
+      trimmed.replace(/\s+/g, " "),
+      trimmed.replace(/^body\s*>\s*/i, ""),
+    ];
+
+    for (const candidate of fallbackSelectors) {
+      try {
+        const target = document.querySelector(candidate);
+        if (target) return target;
+      } catch (error) {
+        console.warn("[voice-widget] failed to resolve action target", error);
+      }
+    }
+
+    const byId = trimmed.match(/^#([A-Za-z0-9_-]+)$/);
+    if (byId) {
+      return document.getElementById(byId[1]);
+    }
+
+    return null;
+  }
+
+  function applyElementHighlight(target) {
+    if (!target) return;
+
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.focus?.();
+    target.style.outline = "3px solid #ffbf47";
+    target.style.boxShadow = "0 0 0 3px rgba(255, 191, 71, 0.45)";
+    target.style.transition = "outline 0.2s ease, box-shadow 0.2s ease";
+    window.setTimeout(() => {
+      if (target) {
+        target.style.outline = "";
+        target.style.boxShadow = "";
+        target.style.transition = "";
+      }
+    }, 1800);
+  }
+
   function executeActionPlan(actionPlan) {
     if (!actionPlan || !actionPlan.action || actionPlan.action === "NONE") {
       return;
@@ -1480,9 +1563,7 @@
     }
 
     if (actionPlan.action === "CLICK") {
-      const target = actionPlan.target
-        ? document.querySelector(actionPlan.target)
-        : null;
+      const target = resolveActionTarget(actionPlan.target);
       dismissOverlays();
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1522,9 +1603,7 @@
     }
 
     if (actionPlan.action === "TYPE") {
-      const target = actionPlan.target
-        ? document.querySelector(actionPlan.target)
-        : null;
+      const target = resolveActionTarget(actionPlan.target);
       dismissOverlays();
       if (
         target &&
@@ -1563,18 +1642,31 @@
 
     if (actionPlan.action === "PRESS_KEY") {
       const key = actionPlan.value || "Enter";
-      const target = document.activeElement || document.body;
-      target.dispatchEvent(
-        new KeyboardEvent("keydown", { key, bubbles: true }),
-      );
-      target.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true }));
+      const target =
+        document.activeElement && document.activeElement !== document.body
+          ? document.activeElement
+          : document.body;
+      dismissOverlays();
+      if (target && typeof target.dispatchEvent === "function") {
+        target.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        target.dispatchEvent(
+          new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }),
+        );
+        if (key === "Enter" && target.tagName === "BUTTON") {
+          target.click();
+        }
+      }
       return;
     }
 
     if (actionPlan.action === "SELECT_OPTION") {
-      const target = actionPlan.target
-        ? document.querySelector(actionPlan.target)
-        : null;
+      const target = resolveActionTarget(actionPlan.target);
       dismissOverlays();
       if (target && target.tagName === "SELECT") {
         target.value = actionPlan.value || target.value;
@@ -1584,9 +1676,7 @@
     }
 
     if (actionPlan.action === "CLEAR_INPUT") {
-      const target = actionPlan.target
-        ? document.querySelector(actionPlan.target)
-        : null;
+      const target = resolveActionTarget(actionPlan.target);
       if (
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
@@ -1599,12 +1689,12 @@
     }
 
     if (actionPlan.action === "HOVER") {
-      const target = actionPlan.target
-        ? document.querySelector(actionPlan.target)
-        : null;
+      const target = resolveActionTarget(actionPlan.target);
       if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
         target.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
         target.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+        applyElementHighlight(target);
       }
       return;
     }
@@ -1613,19 +1703,9 @@
       actionPlan.action === "HIGHLIGHT_ELEMENT" ||
       actionPlan.action === "FOCUS"
     ) {
-      const target = actionPlan.target
-        ? document.querySelector(actionPlan.target)
-        : null;
+      const target = resolveActionTarget(actionPlan.target);
       if (target) {
-        target.focus?.();
-        target.style.outline = "3px solid #ffbf47";
-        target.style.boxShadow = "0 0 0 3px rgba(255, 191, 71, 0.45)";
-        window.setTimeout(() => {
-          if (target) {
-            target.style.outline = "";
-            target.style.boxShadow = "";
-          }
-        }, 1800);
+        applyElementHighlight(target);
       }
       return;
     }
@@ -2480,7 +2560,9 @@
         scriptState.listening = false;
         setListeningState(false);
         setStatus("Microphone access denied");
-        setFeedback("Microphone access denied. Please allow access and try again.");
+        setFeedback(
+          "Microphone access denied. Please allow access and try again.",
+        );
       });
   }
 
