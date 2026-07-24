@@ -251,7 +251,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     if (isStale()) return;
     console.log("[ws] Deepgram live connection closed");
 
-    // This connection was still the "current" one (isStale() is false) yet
+    // This connection was still the "current" one (isStale() is false) yet 
     // it closed on its own — we didn't call closeDeepgramConnection for it.
     // That means Deepgram dropped us (idle/NET-0001, transient network
     // blip, etc), not the user pausing/stopping. If the client still wants
