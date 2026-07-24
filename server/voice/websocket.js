@@ -163,6 +163,14 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     console.log("[ws] Deepgram live connection closed");
   });
 
+  connection.connect();
+  await Promise.race([
+    connection.waitForOpen(),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("Deepgram open timed out")), 5000);
+    }),
+  ]);
+
   return connection;
 }
 
