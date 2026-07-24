@@ -1,5 +1,4 @@
 import dotenv from "dotenv";
-import { DeepgramClient } from "@deepgram/sdk";
 import { WebSocketServer } from "ws";
 import { buildActionPlan } from "./planner.js";
 import Project from "../models/Project.js";
@@ -7,9 +6,6 @@ import InteractionLog from "../models/InteractionLog.js";
 import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
 
 dotenv.config();
-
-const DEEPGRAM_TRANSCRIPTION_URL =
-  "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true";
 
 function createDeepgramKeyRotator(config = {}) {
   const apiKeys = normalizeApiKeys(
@@ -164,144 +160,7 @@ function closeDeepgramConnection(session) {
 }
 
 async function createDeepgramStream(session, socket, deepgramApiKey) {
-  // Snapshot the generation BEFORE any async work. This is what makes
-  // the staleness check correct even for the very first "open" event —
-  // it no longer depends on session.deepgramConnection being assigned
-  // yet, which was the root cause of the regression above.
-  const myGeneration = session.deepgramGeneration;
-
-  const client = new DeepgramClient({ apiKey: deepgramApiKey });
-  const connection = await client.listen.v1.connect({
-    model: "nova-2",
-    smart_format: true,
-    interim_results: true,
-    endpointing: 300,
-    utterance_end_ms: 1000,
-    vad_events: true,
-    Authorization: `Token ${deepgramApiKey}`,
-  });
-
-  if (
-    !connection ||
-    typeof connection.on !== "function" ||
-    typeof connection.sendMedia !== "function"
-  ) {
-    throw new Error("Deepgram live connection is not available");
-  }
-
-  const isStale = () => session.deepgramGeneration !== myGeneration;
-
-  connection.on("open", () => {
-    if (isStale()) {
-      try {
-        connection.close?.();
-        connection.removeAllListeners?.();
-      } catch (e) {}
-      return;
-    }
-    console.log("[ws] Deepgram live connection opened");
-    startKeepAlive(session, connection);
-    flushPendingAudioChunks(session, connection);
-  });
-
-  connection.on("message", (data) => {
-    if (isStale()) return;
-    const alternative = data?.channel?.alternatives?.[0];
-    const transcript = String(alternative?.transcript || "").trim();
-    if (!transcript || !(data?.is_final && data?.speech_final)) return;
-
-    session.transcripts.push(transcript);
-    try {
-      socket.send(
-        JSON.stringify({
-          type: "transcript",
-          source: "deepgram",
-          text: transcript,
-        }),
-      );
-    } catch (error) {
-      console.warn(
-        "[ws] failed to forward transcript to client",
-        error.message,
-      );
-    }
-  });
-
-  connection.on("error", (error) => {
-    if (isStale()) return;
-    console.error("[ws] Deepgram stream error", error);
-    try {
-      socket.send(
-        JSON.stringify({
-          type: "error",
-          source: "deepgram",
-          message: "Deepgram stream error",
-        }),
-      );
-    } catch (e) {
-      console.warn("[ws] failed to send Deepgram error to client", e.message);
-    }
-  });
-
-  connection.on("close", () => {
-    if (session.deepgramConnection === connection) {
-      session.deepgramConnection = null;
-    }
-    stopKeepAlive(session);
-    if (isStale()) return;
-    console.log("[ws] Deepgram live connection closed");
-
-    // This connection was still the "current" one (isStale() is false) yet 
-    // it closed on its own — we didn't call closeDeepgramConnection for it.
-    // That means Deepgram dropped us (idle/NET-0001, transient network
-    // blip, etc), not the user pausing/stopping. If the client still wants
-    // to be listening, reconnect automatically instead of silently going
-    // deaf for the rest of the session.
-    if (session.desiredStreaming) {
-      console.warn(
-        "[ws] Deepgram connection dropped unexpectedly; reconnecting",
-      );
-      createDeepgramStream(session, socket, deepgramApiKey)
-        .then((newConnection) => {
-          if (session.desiredStreaming && !isStale()) {
-            session.deepgramConnection = newConnection;
-            console.log("[ws] Deepgram live connection re-established");
-          } else {
-            try {
-              newConnection.close?.();
-              newConnection.removeAllListeners?.();
-            } catch (e) {}
-          }
-        })
-        .catch((error) => {
-          console.error("[ws] failed to reconnect to Deepgram", error);
-        });
-    }
-  });
-
-  connection.connect();
-  await Promise.race([
-    connection.waitForOpen(),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Deepgram open timed out")), 5000),
-    ),
-  ]);
-
-  // If a stop/pause/restart happened while we were still connecting,
-  // don't hand back a connection the caller thinks is live — kill it
-  // and surface a clear error instead.
-  if (isStale()) {
-    try {
-      connection.close?.();
-      connection.removeAllListeners?.();
-    } catch (e) {}
-    throw new Error(
-      "Deepgram connection superseded before it finished opening",
-    );
-  }
-
-  flushPendingAudioChunks(session, connection);
-  return connection;
+  return null;
 }
 
 export function setupVoiceWebSocket(server, config = {}) {
@@ -340,8 +199,6 @@ export function setupVoiceWebSocket(server, config = {}) {
               error.message,
             );
           }
-        } else if (session.desiredStreaming) {
-          bufferAudioChunk(session, data);
         }
         console.debug("[ws] received audio chunk", {
           latestSize: data.byteLength || data.length || 0,
@@ -362,30 +219,15 @@ export function setupVoiceWebSocket(server, config = {}) {
           if (state === "pause" || state === "stop") {
             session.desiredStreaming = false;
             closeDeepgramConnection(session);
-            console.debug("[ws] paused or stopped Deepgram stream", { state });
+            console.debug("[ws] paused or stopped audio stream", { state });
             return;
           }
 
           if (state === "start" || state === "resume") {
-            if (!deepgramApiKey) {
-              console.warn(
-                "[ws] Deepgram API key is not configured; cannot open stream",
-              );
-              return;
-            }
             session.desiredStreaming = true;
             closeDeepgramConnection(session);
-            try {
-              session.deepgramConnection = await createDeepgramStream(
-                session,
-                socket,
-                deepgramApiKey,
-              );
-              console.debug("[ws] opened Deepgram stream", { state });
-            } catch (error) {
-              console.error("[ws] failed to initialize Deepgram stream", error);
-              session.deepgramConnection = null;
-            }
+            session.deepgramConnection = null;
+            console.debug("[ws] browser speech mode active", { state });
             return;
           }
         }
