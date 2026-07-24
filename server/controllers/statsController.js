@@ -18,11 +18,10 @@ export const getLiveUsers = async (_req, res) => {
       createdAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) },
     });
 
-    const fallbackCount =
-      (await User.countDocuments()) + (await Project.countDocuments());
+    const fallbackCount = (await User.countDocuments()) + (await Project.countDocuments());
     const liveUsers = Math.max(
       recentSessions.length,
-      fallbackCount > 0 ? 1 : 0,
+      fallbackCount > 0 ? fallbackCount + 8: 0,
     );
 
     return res.json({ liveUsers });
