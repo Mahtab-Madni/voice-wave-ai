@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { createClient } from "@deepgram/sdk";
+import { DeepgramClient } from "@deepgram/sdk";
 import { WebSocketServer } from "ws";
 import { buildActionPlan } from "./planner.js";
 import Project from "../models/Project.js";
@@ -73,8 +73,13 @@ function getSession(sessions, clientId, socket) {
 
 function closeDeepgramConnection(session) {
   if (!session.deepgramConnection) return;
+  const connection = session.deepgramConnection;
   try {
-    session.deepgramConnection.finish();
+    if (typeof connection.close === "function") {
+      connection.close();
+    } else if (typeof connection.finish === "function") {
+      connection.finish();
+    }
   } catch (error) {
     console.warn("[ws] failed to close Deepgram connection", error.message);
   } finally {
@@ -82,9 +87,9 @@ function closeDeepgramConnection(session) {
   }
 }
 
-function createDeepgramStream(session, socket, deepgramApiKey) {
-  const client = createClient(deepgramApiKey);
-  const connection = client.listen.live({
+async function createDeepgramStream(session, socket, deepgramApiKey) {
+  const client = new DeepgramClient({ apiKey: deepgramApiKey });
+  const connection = await client.listen.v2.connect({
     model: "nova-2",
     smart_format: true,
     interim_results: false,
@@ -93,12 +98,13 @@ function createDeepgramStream(session, socket, deepgramApiKey) {
     vad_events: true,
     encoding: "opus",
     sample_rate: 48000,
+    Authorization: `Token ${deepgramApiKey}`,
   });
 
   if (
     !connection ||
     typeof connection.on !== "function" ||
-    typeof connection.send !== "function"
+    typeof connection.sendMedia !== "function"
   ) {
     throw new Error("Deepgram live connection is not available");
   }
@@ -189,7 +195,7 @@ export function setupVoiceWebSocket(server, config = {}) {
       if (isBinary) {
         if (session.deepgramConnection) {
           try {
-            session.deepgramConnection.send(data);
+            session.deepgramConnection.sendMedia(data);
           } catch (error) {
             console.warn(
               "[ws] failed to forward audio to Deepgram",
@@ -227,12 +233,17 @@ export function setupVoiceWebSocket(server, config = {}) {
               return;
             }
             closeDeepgramConnection(session);
-            session.deepgramConnection = createDeepgramStream(
-              session,
-              socket,
-              deepgramApiKey,
-            );
-            console.debug("[ws] opened Deepgram stream", { state });
+            try {
+              session.deepgramConnection = await createDeepgramStream(
+                session,
+                socket,
+                deepgramApiKey,
+              );
+              console.debug("[ws] opened Deepgram stream", { state });
+            } catch (error) {
+              console.error("[ws] failed to initialize Deepgram stream", error);
+              session.deepgramConnection = null;
+            }
             return;
           }
         }
@@ -326,7 +337,11 @@ export function setupVoiceWebSocket(server, config = {}) {
       }
       if (session.deepgramConnection) {
         try {
-          session.deepgramConnection.finish();
+          if (typeof session.deepgramConnection.close === "function") {
+            session.deepgramConnection.close();
+          } else if (typeof session.deepgramConnection.finish === "function") {
+            session.deepgramConnection.finish();
+          }
         } catch (error) {
           console.warn(
             "[ws] failed to close Deepgram connection",
