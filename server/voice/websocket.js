@@ -89,7 +89,7 @@ function closeDeepgramConnection(session) {
 
 async function createDeepgramStream(session, socket, deepgramApiKey) {
   const client = new DeepgramClient({ apiKey: deepgramApiKey });
-  const connection = await client.listen.v2.connect({
+  const connection = await client.listen.v1.connect({
     model: "nova-2",
     smart_format: true,
     interim_results: false,
