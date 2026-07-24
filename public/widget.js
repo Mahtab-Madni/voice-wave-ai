@@ -1033,20 +1033,47 @@
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       audio.preload = "auto";
-      const settlePlayback = () => {
-        URL.revokeObjectURL(audioUrl);
-        resolvePlayback();
-      };
-      audio.addEventListener("ended", settlePlayback);
-      audio.addEventListener("error", settlePlayback);
       scriptState.activeAudio = audio;
-      await audio.play();
-      const fallbackDelay = estimateSpeechDurationMs(message);
-      window.setTimeout(settlePlayback, fallbackDelay);
+
+      // IMPORTANT: audio.play() resolves as soon as playback *starts*, not
+      // when it finishes. The caller (handleActionPlan -> endProcessingCycle)
+      // uses this function to decide when it's safe to resume the
+      // microphone, so we must not resolve until the clip has actually
+      // finished (or errored/timed out) — otherwise audio capture resumes
+      // while the assistant is still speaking and the mic picks up its own
+      // TTS output.
+      await new Promise((resolve) => {
+        let settled = false;
+        const settlePlayback = () => {
+          if (settled) return;
+          settled = true;
+          URL.revokeObjectURL(audioUrl);
+          resolvePlayback();
+          resolve();
+        };
+
+        audio.addEventListener("ended", settlePlayback);
+        audio.addEventListener("error", settlePlayback);
+
+        // Backstop in case 'ended'/'error' never fire (autoplay blocked,
+        // stalled decode, etc.) so we don't hold the pipeline open forever.
+        const fallbackDelay = estimateSpeechDurationMs(message);
+        window.setTimeout(settlePlayback, fallbackDelay);
+
+        audio.play().catch((error) => {
+          console.warn("[voice-widget] audio playback failed", error);
+          settlePlayback();
+        });
+      });
     } catch (error) {
       console.warn("[voice-widget] speech synthesis failed", error);
       const fallbackDelay = estimateSpeechDurationMs(message);
-      window.setTimeout(resolvePlayback, fallbackDelay);
+      await new Promise((resolve) =>
+        window.setTimeout(() => {
+          resolvePlayback();
+          resolve();
+        }, fallbackDelay),
+      );
     }
   }
 
@@ -1655,7 +1682,16 @@
     }
 
     try {
-      scriptState.mediaRecorder.start();
+      // Use a timeslice so the recorder emits data continuously on its own
+      // every 250ms, for as long as it's recording. This means it never has
+      // to be stopped and restarted mid-utterance just to force a chunk out
+      // — that restart was injecting a brand-new WebM/EBML header into the
+      // middle of an already-open Deepgram connection, corrupting the
+      // container Deepgram was decoding and silently killing transcription.
+      // Deepgram's own `endpointing`/`utterance_end_ms` config (see
+      // websocket.js) is what decides "user spoke, then went silent" — the
+      // client's only job now is to keep streaming continuously.
+      scriptState.mediaRecorder.start(250);
     } catch (error) {
       console.error("[voice-widget] failed to start media recorder", error);
       return;
@@ -1664,7 +1700,6 @@
     scriptState.listening = true;
     scriptState.pendingFlushRequest = false;
     scriptState.lastVoiceActivityAt = performance.now();
-    startChunkFlushLoop();
     setStatus("Listening");
     setListeningState(true);
     setFeedback("Streaming audio...");
@@ -1674,8 +1709,6 @@
     scriptState.audioControlState = "pause";
     sendSocketPayload({ type: "audio-control", state: "pause" });
     clearSilenceTimer();
-    clearChunkFlushTimer();
-    stopAudioMonitoring();
     if (
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state !== "inactive"
@@ -1703,9 +1736,6 @@
       scriptState.mediaRecorder.state === "recording"
     ) {
       return;
-    }
-    if (!scriptState.audioContext) {
-      setupAudioMonitoring(scriptState.stream);
     }
     startMediaRecorder();
   }
@@ -2141,78 +2171,26 @@
     if (!scriptState.listening) return;
 
     console.debug("[voice-widget] flushAudioNow invoked", {
-      pendingFlushRequest: scriptState.pendingFlushRequest,
       mediaRecorderState: scriptState.mediaRecorder?.state,
     });
 
+    // NOTE: this used to stop() and recreate the MediaRecorder to force a
+    // fresh chunk out. That injected a brand-new WebM/EBML header into the
+    // middle of an already-open Deepgram connection and corrupted the
+    // container Deepgram was decoding, which silently killed transcription.
+    // With continuous timeslice-based recording (see startMediaRecorder),
+    // there's no need to ever stop the recorder mid-utterance — a plain
+    // requestData() nudges out whatever's buffered without breaking anything.
     if (
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state === "recording" &&
       typeof scriptState.mediaRecorder.requestData === "function"
     ) {
-      scriptState.pendingFlushRequest = true;
-      console.debug("[voice-widget] requesting MediaRecorder data for flush", {
-        pendingFlushRequest: scriptState.pendingFlushRequest,
-      });
       try {
-        // Stop & restart the MediaRecorder to force emission of a fresh init chunk
-        // suppressFlushOnStop prevents the onstop handler from sending an extra flush
-        scriptState.suppressFlushOnStop = true;
-        try {
-          scriptState.mediaRecorder.stop();
-        } catch (e) {
-          console.warn("[voice-widget] mediaRecorder.stop() failed", e);
-        }
-        scriptState.mediaRecorder = null;
-
-        // Restart shortly after to resume streaming and emit init segment
-        setTimeout(() => {
-          try {
-            startMediaRecorder();
-            // allow recorder to initialize before requesting data
-            setTimeout(() => {
-              try {
-                // send cached initChunk if we have it
-                const now = Date.now();
-                if (
-                  scriptState.initChunk &&
-                  scriptState.socket &&
-                  scriptState.socket.readyState === WebSocket.OPEN &&
-                  now - (scriptState.initChunkLastSentAt || 0) > 300
-                ) {
-                  try {
-                    scriptState.socket.send(scriptState.initChunk);
-                    scriptState.initChunkLastSentAt = now;
-                  } catch (e) {}
-                }
-                if (
-                  scriptState.mediaRecorder &&
-                  typeof scriptState.mediaRecorder.requestData === "function"
-                ) {
-                  scriptState.mediaRecorder.requestData();
-                }
-              } catch (e) {}
-            }, 120);
-          } catch (e) {
-            console.warn("[voice-widget] restart media recorder failed", e);
-          } finally {
-            scriptState.suppressFlushOnStop = false;
-          }
-        }, 80);
-        return;
+        scriptState.mediaRecorder.requestData();
       } catch (error) {
-        scriptState.pendingFlushRequest = false;
         console.warn("[voice-widget] failed to request data for flush", error);
       }
-    }
-
-    if (
-      scriptState.socket &&
-      scriptState.socket.readyState === WebSocket.OPEN
-    ) {
-      console.debug("[voice-widget] sending flush-audio without requestData");
-      scriptState.socket.send(JSON.stringify({ type: "flush-audio" }));
-      setStatus("Processing speech...");
     }
   }
 
@@ -2335,101 +2313,10 @@
       .getUserMedia({ audio: true })
       .then((stream) => {
         scriptState.stream = stream;
-        setupAudioMonitoring(stream);
-
-        const preferredMimeType =
-          typeof MediaRecorder !== "undefined" &&
-          MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-            ? "audio/webm;codecs=opus"
-            : undefined;
-
-        scriptState.mediaRecorder = preferredMimeType
-          ? new MediaRecorder(stream, { mimeType: preferredMimeType })
-          : new MediaRecorder(stream);
-
-        scriptState.mediaMimeType =
-          scriptState.mediaRecorder.mimeType || preferredMimeType;
-        console.debug("[voice-widget] determined media mime type", {
-          mediaMimeType: scriptState.mediaMimeType,
-        });
-        if (
-          scriptState.socket &&
-          scriptState.socket.readyState === WebSocket.OPEN &&
-          scriptState.mediaMimeType
-        ) {
-          scriptState.socket.send(
-            JSON.stringify({
-              type: "media-type",
-              mimeType: scriptState.mediaMimeType,
-            }),
-          );
-        }
-
-        scriptState.mediaRecorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            // capture initial chunk for later flushes
-            if (!scriptState.initChunk) {
-              try {
-                event.data.arrayBuffer().then((ab) => {
-                  try {
-                    scriptState.initChunk = ab;
-                  } catch (e) {}
-                });
-              } catch (e) {}
-            }
-            console.debug(
-              "[voice-widget] mediaRecorder ondataavailable sending chunk",
-              {
-                size: event.data.size,
-                pendingFlushRequest: scriptState.pendingFlushRequest,
-              },
-            );
-            scriptState.socket.send(event.data);
-          }
-
-          if (scriptState.pendingFlushRequest) {
-            console.debug(
-              "[voice-widget] pendingFlushRequest fulfilled, sending flush-audio",
-            );
-            scriptState.pendingFlushRequest = false;
-            if (
-              scriptState.socket &&
-              scriptState.socket.readyState === WebSocket.OPEN
-            ) {
-              scriptState.socket.send(JSON.stringify({ type: "flush-audio" }));
-              setStatus("Processing speech...");
-            }
-          }
-        };
-
-        scriptState.mediaRecorder.onstop = () => {
-          if (scriptState.suppressFlushOnStop) {
-            return;
-          }
-          if (
-            scriptState.socket &&
-            scriptState.socket.readyState === WebSocket.OPEN
-          ) {
-            scriptState.socket.send(JSON.stringify({ type: "flush-audio" }));
-          }
-        };
-
-        scriptState.mediaRecorder.start();
-        // Force an initial dataavailable event so the init EBML header is sent
-        try {
-          if (typeof scriptState.mediaRecorder.requestData === "function") {
-            scriptState.mediaRecorder.requestData();
-          }
-        } catch (err) {
-          console.warn("[voice-widget] requestData after start failed", err);
-        }
-        scriptState.listening = true;
-        scriptState.pendingFlushRequest = false;
-        scriptState.lastVoiceActivityAt = performance.now();
-        startChunkFlushLoop();
-        setStatus("Listening");
-        setListeningState(true);
-        setFeedback("Streaming audio...");
+        // Delegate actual MediaRecorder creation/wiring to the same helper
+        // resumeAudioCapture() uses for every subsequent turn, so the
+        // initial start and every auto-resumed turn behave identically.
+        startMediaRecorder();
       })
       .catch((error) => {
         console.error("[voice-widget] microphone access denied", error);
