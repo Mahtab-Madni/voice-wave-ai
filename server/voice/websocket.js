@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
+import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import { WebSocketServer } from "ws";
 import { buildActionPlan } from "./planner.js";
-import { appendChunk, clearAudioChunk } from "./audioSession.js";
 import Project from "../models/Project.js";
 import InteractionLog from "../models/InteractionLog.js";
 import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
@@ -65,210 +65,99 @@ function getSession(sessions, clientId, socket) {
       lastTranscript: "",
       conversationContext: [],
       mimeType: "audio/webm",
+      deepgramConnection: null,
     });
   }
   return sessions.get(clientId);
 }
 
-function scheduleTranscription(session, config, keyRotator = null) {
-  const deepgramApiKey = getDeepgramApiKey(config, keyRotator);
-  if (!deepgramApiKey) return;
-  if (session.flushTimer) {
-    clearTimeout(session.flushTimer);
+function closeDeepgramConnection(session) {
+  if (!session.deepgramConnection) return;
+  try {
+    session.deepgramConnection.finish();
+  } catch (error) {
+    console.warn("[ws] failed to close Deepgram connection", error.message);
+  } finally {
+    session.deepgramConnection = null;
   }
-  // This debounce is a fallback. In practice, the browser-side silence path is the
-  // effective trigger while audio keeps arriving, because the client sends a
-  // flush-audio message once the analyser detects a quiet period.
-  session.flushTimer = setTimeout(async () => {
-    session.flushTimer = null;
-    const text = await transcribeAudio(session, config, keyRotator);
-    if (text) {
-      session.transcripts.push(text);
-      session.socket.send(
-        JSON.stringify({ type: "transcript", source: "deepgram", text }),
-      );
-    }
-  }, 950);
 }
 
-async function transcribeAudio(session, config, keyRotator = null) {
-  const deepgramApiKey = getDeepgramApiKey(config, keyRotator);
-  if (!deepgramApiKey) return null;
+function createDeepgramStream(session, socket, deepgramApiKey) {
+  const client = createClient(deepgramApiKey);
+  const connection = client.listen.live({
+    model: "nova-2",
+    smart_format: true,
+    interim_results: false,
+    endpointing: 300,
+    utterance_end_ms: 1000,
+    vad_events: true,
+    encoding: "opus",
+    sample_rate: 48000,
+  });
 
-  if (session.transcribing) {
-    console.debug(
-      "[ws] transcription already in flight, skipping duplicate flush",
-    );
-    return null;
+  if (
+    !connection ||
+    typeof connection.on !== "function" ||
+    typeof connection.send !== "function"
+  ) {
+    throw new Error("Deepgram live connection is not available");
   }
 
-  session.transcribing = true;
+  connection.on(LiveTranscriptionEvents.Open, () => {
+    console.log("[ws] Deepgram live connection opened");
+  });
 
-  try {
-    // Build a combined buffer from recent chunks (if present)
-    const chunks = Array.isArray(session.audioChunks)
-      ? session.audioChunks.slice()
-      : session.audioChunk
-        ? [session.audioChunk]
-        : [];
+  connection.on(LiveTranscriptionEvents.Transcript, (data) => {
+    const alternative = data?.channel?.alternatives?.[0];
+    const transcript = String(alternative?.transcript || "").trim();
 
-    if (!chunks || chunks.length === 0) {
-      return null;
+    if (!transcript || !(data?.is_final && data?.speech_final)) {
+      return;
     }
 
-    let audioBuffer = Buffer.concat(chunks);
-
-    // Ensure a sane base content type
-    let contentType = String(session.mimeType || "audio/webm").trim();
-    if (contentType.includes("audio/webm")) contentType = "audio/webm";
-
-    // Validate EBML header for WebM (0x1A45DFA3). If missing, use the pinned header
-    // from the first chunk and reattach it to the front so the payload remains valid.
-    const EBML = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
-    let headerIndex = audioBuffer.indexOf(EBML);
-    if (headerIndex === -1 && session.headerChunk) {
-      audioBuffer = Buffer.concat([session.headerChunk, audioBuffer]);
-      headerIndex = 0;
-    }
-
-    if (headerIndex === -1) {
-      // If we have only a few chunks so far, wait a bit for the initialization header
-      const retryCount = session._transcriptionRetryCount || 0;
-      const CHUNK_WAIT_THRESHOLD = 12;
-      if (chunks.length < CHUNK_WAIT_THRESHOLD && retryCount < 4) {
-        session._transcriptionRetryCount = retryCount + 1;
-        console.warn("[ws] no EBML header yet, scheduling retry", {
-          attempt: session._transcriptionRetryCount,
-          chunks: chunks.length,
-        });
-        if (session.flushTimer) {
-          clearTimeout(session.flushTimer);
-          session.flushTimer = null;
-        }
-        session.flushTimer = setTimeout(async () => {
-          session.flushTimer = null;
-          const text = await transcribeAudio(session, config, keyRotator);
-          if (text) {
-            session.transcripts.push(text);
-            try {
-              session.socket.send(
-                JSON.stringify({
-                  type: "transcript",
-                  source: "deepgram",
-                  text,
-                }),
-              );
-            } catch (e) {}
-          }
-        }, 400);
-        return null;
-      }
-
-      console.warn(
-        "[ws] dropped audio chunk: EBML header not found (likely partial fragment)",
-        { bytes: audioBuffer.length, mimeType: session.mimeType },
-      );
-      try {
-        session.socket.send(
-          JSON.stringify({
-            type: "drop",
-            reason: "no-ebml",
-            bytes: audioBuffer.length,
-          }),
-        );
-      } catch (e) {}
-      clearAudioChunk(session);
-      if (session._transcriptionRetryCount)
-        session._transcriptionRetryCount = 0;
-      return null;
-    }
-
-    // Slice from EBML header to attempt to produce a valid WebM payload
-    const payload = audioBuffer.slice(headerIndex);
-
-    // Minimum size heuristic: require at least 2 KB
-    if (payload.length < 2048) {
-      console.warn(
-        "[ws] dropped audio chunk: payload too small after header slicing",
-        { bytes: payload.length },
-      );
-      try {
-        session.socket.send(
-          JSON.stringify({
-            type: "drop",
-            reason: "too-small",
-            bytes: payload.length,
-          }),
-        );
-      } catch (e) {}
-      clearAudioChunk(session);
-      if (session._transcriptionRetryCount)
-        session._transcriptionRetryCount = 0;
-      return null;
-    }
-
-    console.log("[ws] sending audio to Deepgram", {
-      mimeType: session.mimeType,
-      contentType,
-      bytes: payload.length,
-    });
-
-    let response;
+    session.transcripts.push(transcript);
     try {
-      response = await fetch(DEEPGRAM_TRANSCRIPTION_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${deepgramApiKey}`,
-          "Content-Type": contentType,
-        },
-        body: payload,
-      });
-    } catch (error) {
-      console.error("[ws] Deepgram network failure", error.message);
-      // keep chunks buffered for retry
-      return null;
-    }
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "<no details>");
-      console.warn(
-        "[ws] Deepgram transcription failed, dropping corrupted audio chunk",
-        { status: response.status, detail },
+      socket.send(
+        JSON.stringify({
+          type: "transcript",
+          source: "deepgram",
+          text: transcript,
+        }),
       );
-      try {
-        session.socket.send(
-          JSON.stringify({
-            type: "drop",
-            reason: "transcription-failed",
-            status: response.status,
-            detail,
-          }),
-        );
-      } catch (e) {}
-      clearAudioChunk(session);
-      if (session._transcriptionRetryCount)
-        session._transcriptionRetryCount = 0;
-      return null;
+    } catch (error) {
+      console.warn(
+        "[ws] failed to forward transcript to client",
+        error.message,
+      );
     }
+  });
 
-    // On success, clear buffered chunks and reset retry counter
-    clearAudioChunk(session);
-    if (session._transcriptionRetryCount) session._transcriptionRetryCount = 0;
+  connection.on(LiveTranscriptionEvents.Error, (error) => {
+    console.error("[ws] Deepgram stream error", error);
+    try {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          source: "deepgram",
+          message: "Deepgram stream error",
+        }),
+      );
+    } catch (error) {
+      console.warn(
+        "[ws] failed to send Deepgram error to client",
+        error.message,
+      );
+    }
+  });
 
-    const result = await response.json();
-    const transcript =
-      result?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ||
-      null;
+  connection.on(LiveTranscriptionEvents.Close, () => {
+    if (session.deepgramConnection === connection) {
+      session.deepgramConnection = null;
+    }
+    console.log("[ws] Deepgram live connection closed");
+  });
 
-    console.log("[ws] deepgram result", {
-      transcript,
-      hasChannel: Boolean(result?.results?.channels?.[0]),
-    });
-
-    return transcript;
-  } finally {
-    session.transcribing = false;
-  }
+  return connection;
 }
 
 export function setupVoiceWebSocket(server, config = {}) {
@@ -281,6 +170,13 @@ export function setupVoiceWebSocket(server, config = {}) {
     const session = getSession(sessions, clientId, socket);
     console.log(`[ws] client connected: ${clientId}`);
 
+    const deepgramApiKey = getDeepgramApiKey(config, deepgramKeyRotator);
+    if (!deepgramApiKey) {
+      console.warn(
+        "[ws] Deepgram API key is not configured; live transcription disabled",
+      );
+    }
+
     socket.send(
       JSON.stringify({
         type: "welcome",
@@ -291,10 +187,16 @@ export function setupVoiceWebSocket(server, config = {}) {
 
     socket.on("message", async (data, isBinary) => {
       if (isBinary) {
-        appendChunk(session, data);
-        // Chunk arrivals reset the debounce timer, but the actual transcription
-        // trigger is the client-side silence flush path that emits flush-audio.
-        scheduleTranscription(session, config, deepgramKeyRotator);
+        if (session.deepgramConnection) {
+          try {
+            session.deepgramConnection.send(data);
+          } catch (error) {
+            console.warn(
+              "[ws] failed to forward audio to Deepgram",
+              error.message,
+            );
+          }
+        }
         console.debug("[ws] received audio chunk", {
           latestSize: data.byteLength || data.length || 0,
         });
@@ -309,22 +211,36 @@ export function setupVoiceWebSocket(server, config = {}) {
           return;
         }
 
-        if (payload.type === "flush-audio") {
-          if (session.flushTimer) {
-            clearTimeout(session.flushTimer);
-            session.flushTimer = null;
+        if (payload.type === "audio-control") {
+          const state = String(payload.state || "").toLowerCase();
+          if (state === "pause" || state === "stop") {
+            closeDeepgramConnection(session);
+            console.debug("[ws] paused or stopped Deepgram stream", { state });
+            return;
           }
-          const text = await transcribeAudio(
-            session,
-            config,
-            deepgramKeyRotator,
-          );
-          if (text) {
-            session.transcripts.push(text);
-            socket.send(
-              JSON.stringify({ type: "transcript", source: "deepgram", text }),
+
+          if (state === "start" || state === "resume") {
+            if (!deepgramApiKey) {
+              console.warn(
+                "[ws] Deepgram API key is not configured; cannot open stream",
+              );
+              return;
+            }
+            closeDeepgramConnection(session);
+            session.deepgramConnection = createDeepgramStream(
+              session,
+              socket,
+              deepgramApiKey,
             );
+            console.debug("[ws] opened Deepgram stream", { state });
+            return;
           }
+        }
+
+        if (payload.type === "flush-audio") {
+          console.debug(
+            "[ws] flush-audio received; Deepgram endpointing handles utterance completion",
+          );
         } else if (payload.type === "intent") {
           let projectConfig = null;
           if (payload.projectId) {
@@ -407,6 +323,16 @@ export function setupVoiceWebSocket(server, config = {}) {
     socket.on("close", () => {
       if (session.flushTimer) {
         clearTimeout(session.flushTimer);
+      }
+      if (session.deepgramConnection) {
+        try {
+          session.deepgramConnection.finish();
+        } catch (error) {
+          console.warn(
+            "[ws] failed to close Deepgram connection",
+            error.message,
+          );
+        }
       }
       sessions.delete(clientId);
     });

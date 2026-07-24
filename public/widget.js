@@ -633,6 +633,8 @@
     pendingFlushRequest: false,
     mediaMimeType: null,
     chunkFlushTimer: null,
+    pendingAudioControlState: null,
+    audioControlState: "idle",
     transcriptDispatchInFlight: new Set(),
     lastSpokenMessageKey: "",
     lastSpokenAt: 0,
@@ -1669,6 +1671,8 @@
   }
 
   function pauseAudioCapture() {
+    scriptState.audioControlState = "pause";
+    sendSocketPayload({ type: "audio-control", state: "pause" });
     clearSilenceTimer();
     clearChunkFlushTimer();
     stopAudioMonitoring();
@@ -1692,6 +1696,8 @@
   function resumeAudioCapture() {
     if (!scriptState.sessionActive || scriptState.userInitiatedStop) return;
     if (!scriptState.stream) return;
+    scriptState.audioControlState = "resume";
+    sendSocketPayload({ type: "audio-control", state: "resume" });
     if (
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state === "recording"
@@ -1884,6 +1890,28 @@
     }
   }
 
+  function sendSocketPayload(payload) {
+    if (
+      scriptState.socket &&
+      scriptState.socket.readyState === WebSocket.OPEN
+    ) {
+      scriptState.socket.send(JSON.stringify(payload));
+      return true;
+    }
+    scriptState.pendingAudioControlState =
+      payload.type === "audio-control" ? payload.state : null;
+    return false;
+  }
+
+  function flushPendingAudioControlState() {
+    if (!scriptState.pendingAudioControlState) return;
+    sendSocketPayload({
+      type: "audio-control",
+      state: scriptState.pendingAudioControlState,
+    });
+    scriptState.pendingAudioControlState = null;
+  }
+
   function openSocket() {
     if (
       scriptState.socket &&
@@ -1911,6 +1939,7 @@
       console.log("[voice-widget] connected to stream runtime:", wsUrl);
       setStatus("Connected");
       socket.send(JSON.stringify({ type: "ready" }));
+      flushPendingAudioControlState();
       if (scriptState.mediaMimeType) {
         console.debug("[voice-widget] sending media mime type on socket open", {
           mediaMimeType: scriptState.mediaMimeType,
@@ -2297,6 +2326,8 @@
     }
 
     scriptState.sessionActive = true;
+    scriptState.audioControlState = "start";
+    sendSocketPayload({ type: "audio-control", state: "start" });
     scriptState.userInitiatedStop = false;
     scriptState.processing = false;
     openSocket();
@@ -2414,6 +2445,8 @@
     scriptState.listening = false;
     scriptState.sessionActive = false;
     scriptState.userInitiatedStop = true;
+    scriptState.audioControlState = "stop";
+    sendSocketPayload({ type: "audio-control", state: "stop" });
     scriptState.processing = false;
     setProcessingState(false);
     clearSilenceTimer();
