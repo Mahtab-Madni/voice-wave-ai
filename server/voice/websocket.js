@@ -67,9 +67,42 @@ function getSession(sessions, clientId, socket) {
       mimeType: "audio/webm",
       deepgramConnection: null,
       deepgramGeneration: 0, // bumped on every intentional stop/pause/restart
+      // Tracks what the client currently *wants*: true while it's in a
+      // start/resume state, false after an intentional pause/stop. Used to
+      // decide whether an unexpected Deepgram close should trigger an
+      // automatic reconnect or be left alone.
+      desiredStreaming: false,
+      keepAliveTimer: null,
     });
   }
   return sessions.get(clientId);
+}
+
+function stopKeepAlive(session) {
+  if (session.keepAliveTimer) {
+    clearInterval(session.keepAliveTimer);
+    session.keepAliveTimer = null;
+  }
+}
+
+function startKeepAlive(session, connection) {
+  stopKeepAlive(session);
+  // Deepgram closes live connections that go 10s without receiving audio or
+  // a KeepAlive message (NET-0001). We stream audio continuously while
+  // listening, but send KeepAlives too as a defensive backstop — cheap
+  // insurance against exactly the kind of silent, unexplained mid-session
+  // close we hit here.
+  session.keepAliveTimer = setInterval(() => {
+    try {
+      if (typeof connection.keepAlive === "function") {
+        connection.keepAlive();
+      } else if (typeof connection.send === "function") {
+        connection.send(JSON.stringify({ type: "KeepAlive" }));
+      }
+    } catch (error) {
+      console.warn("[ws] failed to send Deepgram KeepAlive", error.message);
+    }
+  }, 5000);
 }
 
 function closeDeepgramConnection(session) {
@@ -77,6 +110,7 @@ function closeDeepgramConnection(session) {
   // connection currently mid-setup (still awaiting waitForOpen()) even
   // before session.deepgramConnection has been assigned to it.
   session.deepgramGeneration += 1;
+  stopKeepAlive(session);
 
   if (!session.deepgramConnection) return;
   const connection = session.deepgramConnection;
@@ -136,6 +170,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
       return;
     }
     console.log("[ws] Deepgram live connection opened");
+    startKeepAlive(session, connection);
   });
 
   connection.on("message", (data) => {
@@ -181,8 +216,36 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     if (session.deepgramConnection === connection) {
       session.deepgramConnection = null;
     }
+    stopKeepAlive(session);
     if (isStale()) return;
     console.log("[ws] Deepgram live connection closed");
+
+    // This connection was still the "current" one (isStale() is false) yet
+    // it closed on its own — we didn't call closeDeepgramConnection for it.
+    // That means Deepgram dropped us (idle/NET-0001, transient network
+    // blip, etc), not the user pausing/stopping. If the client still wants
+    // to be listening, reconnect automatically instead of silently going
+    // deaf for the rest of the session.
+    if (session.desiredStreaming) {
+      console.warn(
+        "[ws] Deepgram connection dropped unexpectedly; reconnecting",
+      );
+      createDeepgramStream(session, socket, deepgramApiKey)
+        .then((newConnection) => {
+          if (session.desiredStreaming && !isStale()) {
+            session.deepgramConnection = newConnection;
+            console.log("[ws] Deepgram live connection re-established");
+          } else {
+            try {
+              newConnection.close?.();
+              newConnection.removeAllListeners?.();
+            } catch (e) {}
+          }
+        })
+        .catch((error) => {
+          console.error("[ws] failed to reconnect to Deepgram", error);
+        });
+    }
   });
 
   connection.connect();
@@ -263,6 +326,7 @@ export function setupVoiceWebSocket(server, config = {}) {
         if (payload.type === "audio-control") {
           const state = String(payload.state || "").toLowerCase();
           if (state === "pause" || state === "stop") {
+            session.desiredStreaming = false;
             closeDeepgramConnection(session);
             console.debug("[ws] paused or stopped Deepgram stream", { state });
             return;
@@ -275,6 +339,7 @@ export function setupVoiceWebSocket(server, config = {}) {
               );
               return;
             }
+            session.desiredStreaming = true;
             closeDeepgramConnection(session);
             try {
               session.deepgramConnection = await createDeepgramStream(
@@ -375,6 +440,7 @@ export function setupVoiceWebSocket(server, config = {}) {
     });
 
     socket.on("close", () => {
+      session.desiredStreaming = false;
       if (session.flushTimer) {
         clearTimeout(session.flushTimer);
       }
