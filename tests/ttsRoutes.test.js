@@ -41,3 +41,8 @@ test("widget invalidates stale speech recognition sessions during stop and resta
     /scriptState\.recognitionSessionId === recognitionSessionId/,
   );
 });
+
+test("widget supports reading dropdown options and selecting by visible option text", () => {
+  assert.match(widgetSource, /getSelectOptionLabels/);
+  assert.match(widgetSource, /selectOptionByLabel/);
+});

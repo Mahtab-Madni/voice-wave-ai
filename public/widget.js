@@ -1132,6 +1132,43 @@
     return `${cleaned.slice(0, 320).trimEnd()}...`;
   }
 
+  function getSelectOptionLabels(selectElement) {
+    if (!selectElement || selectElement.tagName !== "SELECT") return [];
+
+    const labels = [];
+    Array.from(selectElement.options || []).forEach((option) => {
+      const label = String(option.textContent || option.innerText || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (label) labels.push(label);
+    });
+    return labels;
+  }
+
+  function selectOptionByLabel(selectElement, requestedLabel) {
+    if (!selectElement || selectElement.tagName !== "SELECT") return false;
+
+    const normalized = String(requestedLabel || "")
+      .trim()
+      .toLowerCase();
+    if (!normalized) return false;
+
+    const matchedOption = Array.from(selectElement.options || []).find((option) => {
+      const label = String(option.textContent || option.innerText || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      const value = String(option.value || "").trim().toLowerCase();
+      return label === normalized || value === normalized || label.includes(normalized);
+    });
+
+    if (!matchedOption) return false;
+
+    selectElement.value = matchedOption.value;
+    selectElement.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
   function getAccessibilitySpeechText(actionPlan) {
     if (!actionPlan || !actionPlan.action) return "";
 
@@ -1143,7 +1180,10 @@
       const target = actionPlan.target
         ? resolveActionTarget(actionPlan.target)
         : null;
-      const text = getVisibleTextFromElement(target);
+      const selectLabels = target?.tagName === "SELECT"
+        ? getSelectOptionLabels(target).join(", ")
+        : "";
+      const text = selectLabels || getVisibleTextFromElement(target);
       if (text) return summarizeVisibleText(text);
     }
 
@@ -1669,8 +1709,11 @@
       const target = resolveActionTarget(actionPlan.target);
       dismissOverlays();
       if (target && target.tagName === "SELECT") {
-        target.value = actionPlan.value || target.value;
-        target.dispatchEvent(new Event("change", { bubbles: true }));
+        const selected = selectOptionByLabel(target, actionPlan.value || "");
+        if (!selected) {
+          target.value = actionPlan.value || target.value;
+          target.dispatchEvent(new Event("change", { bubbles: true }));
+        }
       }
       return;
     }
