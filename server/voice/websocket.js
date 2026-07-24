@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
+import { createClient } from "@deepgram/sdk";
 import { WebSocketServer } from "ws";
 import { buildActionPlan } from "./planner.js";
 import Project from "../models/Project.js";
@@ -103,11 +103,11 @@ function createDeepgramStream(session, socket, deepgramApiKey) {
     throw new Error("Deepgram live connection is not available");
   }
 
-  connection.on(LiveTranscriptionEvents.Open, () => {
+  connection.on("open", () => {
     console.log("[ws] Deepgram live connection opened");
   });
 
-  connection.on(LiveTranscriptionEvents.Transcript, (data) => {
+  connection.on("message", (data) => {
     const alternative = data?.channel?.alternatives?.[0];
     const transcript = String(alternative?.transcript || "").trim();
 
@@ -132,7 +132,7 @@ function createDeepgramStream(session, socket, deepgramApiKey) {
     }
   });
 
-  connection.on(LiveTranscriptionEvents.Error, (error) => {
+  connection.on("error", (error) => {
     console.error("[ws] Deepgram stream error", error);
     try {
       socket.send(
@@ -150,7 +150,7 @@ function createDeepgramStream(session, socket, deepgramApiKey) {
     }
   });
 
-  connection.on(LiveTranscriptionEvents.Close, () => {
+  connection.on("close", () => {
     if (session.deepgramConnection === connection) {
       session.deepgramConnection = null;
     }
