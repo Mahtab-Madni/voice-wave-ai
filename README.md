@@ -256,7 +256,7 @@ The widget can be embedded with the generated snippet from the dashboard:
 
 ```html
 <script
-  src="https://your-domain/widget.js"
+  src="https://voice-widget-snippet.vercel.app"
   data-project-id="your-project-id"
   async
 ></script>
@@ -266,7 +266,7 @@ If you want to override the API or websocket endpoints explicitly, you can also 
 
 ```html
 <script
-  src="https://your-domain/widget.js"
+  src="https://voice-widget-snippet.vercel.app"
   data-project-id="your-project-id"
   data-api-url="https://your-domain"
   data-ws-url="wss://your-domain/voice"
