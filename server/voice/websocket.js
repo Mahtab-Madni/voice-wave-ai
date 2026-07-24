@@ -96,8 +96,6 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     endpointing: 300,
     utterance_end_ms: 1000,
     vad_events: true,
-    encoding: "opus",
-    sample_rate: 48000,
     Authorization: `Token ${deepgramApiKey}`,
   });
 
