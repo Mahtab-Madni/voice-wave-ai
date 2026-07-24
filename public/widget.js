@@ -2416,10 +2416,6 @@
   }
 
   function stopListening() {
-    const transcript = scriptState.latestTranscript.trim();
-    const rawElements = domParser.collectContext();
-    const elements = domHandler.prepareContext(rawElements);
-
     scriptState.listening = false;
     scriptState.sessionActive = false;
     scriptState.userInitiatedStop = true;
@@ -2454,28 +2450,14 @@
     }
     scriptState.socket = null;
 
-    if (transcript) {
-      submitPendingTranscript(transcript);
-    } else if (elements.length) {
-      if (
-        scriptState.socket &&
-        scriptState.socket.readyState === WebSocket.OPEN
-      ) {
-        scriptState.socket.send(
-          JSON.stringify({
-            type: "intent",
-            transcript,
-            elements,
-            projectId: currentScript?.getAttribute("data-project-id") || "",
-          }),
-        );
-      } else {
-        postIntentToBackend(transcript, elements);
-      }
-    }
+    scriptState.latestTranscript = "";
+    scriptState.lastProcessedTranscript = "";
+    scriptState.lastProcessedTranscriptKey = "";
+    scriptState.pendingClarify = null;
 
     setStatus("Stopped");
     setFeedback("Stopped listening.");
+    void speakReply("Thanks for using. Click mic to start listening again.");
   }
 
   function toggleListening() {
