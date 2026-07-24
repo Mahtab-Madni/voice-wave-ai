@@ -66,19 +66,20 @@ function getSession(sessions, clientId, socket) {
       conversationContext: [],
       mimeType: "audio/webm",
       deepgramConnection: null,
+      deepgramGeneration: 0, // bumped on every intentional stop/pause/restart
     });
   }
   return sessions.get(clientId);
 }
 
 function closeDeepgramConnection(session) {
+  // Bump the generation FIRST, unconditionally — this invalidates any
+  // connection currently mid-setup (still awaiting waitForOpen()) even
+  // before session.deepgramConnection has been assigned to it.
+  session.deepgramGeneration += 1;
+
   if (!session.deepgramConnection) return;
   const connection = session.deepgramConnection;
-  // Detach the reference first. Anything that fires on `connection`
-  // after this point (including an internal auto-reconnect from the
-  // underlying ReconnectingWebSocket transport) will find
-  // session.deepgramConnection no longer === connection, and the
-  // guards below will kill it again instead of letting it live on.
   session.deepgramConnection = null;
 
   try {
@@ -92,15 +93,19 @@ function closeDeepgramConnection(session) {
   }
 
   try {
-    if (typeof connection.removeAllListeners === "function") {
-      connection.removeAllListeners();
-    }
+    connection.removeAllListeners?.();
   } catch (error) {
     console.warn("[ws] failed to remove Deepgram listeners", error.message);
   }
 }
 
 async function createDeepgramStream(session, socket, deepgramApiKey) {
+  // Snapshot the generation BEFORE any async work. This is what makes
+  // the staleness check correct even for the very first "open" event —
+  // it no longer depends on session.deepgramConnection being assigned
+  // yet, which was the root cause of the regression above.
+  const myGeneration = session.deepgramGeneration;
+
   const client = new DeepgramClient({ apiKey: deepgramApiKey });
   const connection = await client.listen.v1.connect({
     model: "nova-2",
@@ -120,12 +125,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     throw new Error("Deepgram live connection is not available");
   }
 
-  // This guard is the actual fix for the open/close loop. If the
-  // underlying transport auto-reconnects after we've already told the
-  // session to close (stop/pause), session.deepgramConnection no longer
-  // points at this object — so we kill the zombie immediately instead
-  // of letting it live, log, and potentially forward stale transcripts.
-  const isStale = () => session.deepgramConnection !== connection;
+  const isStale = () => session.deepgramGeneration !== myGeneration;
 
   connection.on("open", () => {
     if (isStale()) {
@@ -139,7 +139,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
   });
 
   connection.on("message", (data) => {
-    if (isStale()) return; // don't process transcripts from a dead connection
+    if (isStale()) return;
     const alternative = data?.channel?.alternatives?.[0];
     const transcript = String(alternative?.transcript || "").trim();
     if (!transcript || !(data?.is_final && data?.speech_final)) return;
@@ -181,7 +181,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     if (session.deepgramConnection === connection) {
       session.deepgramConnection = null;
     }
-    if (isStale()) return; // don't log every reconnect-loop tick
+    if (isStale()) return;
     console.log("[ws] Deepgram live connection closed");
   });
 
@@ -192,6 +192,19 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
       setTimeout(() => reject(new Error("Deepgram open timed out")), 5000),
     ),
   ]);
+
+  // If a stop/pause/restart happened while we were still connecting,
+  // don't hand back a connection the caller thinks is live — kill it
+  // and surface a clear error instead.
+  if (isStale()) {
+    try {
+      connection.close?.();
+      connection.removeAllListeners?.();
+    } catch (e) {}
+    throw new Error(
+      "Deepgram connection superseded before it finished opening",
+    );
+  }
 
   return connection;
 }
