@@ -613,6 +613,7 @@
     mediaRecorder: null,
     stream: null,
     recognition: null,
+    recognitionSessionId: 0,
     listening: false,
     sessionActive: false,
     userInitiatedStop: false,
@@ -2117,6 +2118,9 @@
       return false;
     }
 
+    scriptState.recognitionSessionId += 1;
+    const recognitionSessionId = scriptState.recognitionSessionId;
+
     if (scriptState.recognition) {
       try {
         scriptState.recognition.abort?.();
@@ -2205,7 +2209,11 @@
       recognition.onend = () => {
         if (
           scriptState.listening &&
-          scriptState.transcriptionMode === "browser"
+          scriptState.transcriptionMode === "browser" &&
+          !scriptState.userInitiatedStop &&
+          scriptState.sessionActive &&
+          scriptState.recognition === recognition &&
+          scriptState.recognitionSessionId === recognitionSessionId
         ) {
           try {
             recognition.start();
@@ -2389,6 +2397,8 @@
   }
 
   function stopRecognition() {
+    scriptState.recognitionSessionId += 1;
+
     if (scriptState.pendingTranscriptTimer) {
       window.clearTimeout(scriptState.pendingTranscriptTimer);
       scriptState.pendingTranscriptTimer = null;
@@ -2437,7 +2447,7 @@
             scriptState.listening = true;
             setListeningState(true);
             setStatus("Listening");
-            setFeedback("Listening with browser speech...");
+            setFeedback("Listening ...");
             return;
           }
         }

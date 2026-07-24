@@ -32,3 +32,12 @@ test("widget tears down the audio monitor during pause and rebuilds it on resume
     /if \(!scriptState\.analyser \|\| !scriptState\.analyserBuffer\) \{\s*return;\s*\}/,
   );
 });
+
+test("widget invalidates stale speech recognition sessions during stop and restart", () => {
+  assert.match(widgetSource, /recognitionSessionId/);
+  assert.match(widgetSource, /scriptState\.recognition === recognition/);
+  assert.match(
+    widgetSource,
+    /scriptState\.recognitionSessionId === recognitionSessionId/,
+  );
+});
