@@ -92,7 +92,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
   const connection = await client.listen.v1.connect({
     model: "nova-2",
     smart_format: true,
-    interim_results: false,
+    interim_results: true,
     endpointing: 300,
     utterance_end_ms: 1000,
     vad_events: true,
