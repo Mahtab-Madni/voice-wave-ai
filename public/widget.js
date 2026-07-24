@@ -1237,6 +1237,56 @@
     await new Promise((resolve) => window.setTimeout(resolve, 400));
   }
 
+  function getClarificationChoice(transcript, options = []) {
+    if (!Array.isArray(options) || options.length === 0) return null;
+
+    const normalized = String(transcript || "")
+      .trim()
+      .toLowerCase();
+    if (!normalized) return null;
+
+    const ordinalMatches = [
+      [/\b(1st|first)\b/, 0],
+      [/\b(2nd|second|two)\b/, 1],
+      [/\b(3rd|third|three)\b/, 2],
+      [/\b(4th|fourth|four)\b/, 3],
+      [/\b(5th|fifth|five)\b/, 4],
+    ];
+
+    for (const [pattern, index] of ordinalMatches) {
+      if (pattern.test(normalized)) {
+        const option = options[index];
+        if (option) return option;
+      }
+    }
+
+    const numberMatch = normalized.match(/\b(\d+)\b/);
+    if (numberMatch) {
+      const idx = Number(numberMatch[1]) - 1;
+      const option = options[idx];
+      if (option) return option;
+    }
+
+    for (const option of options) {
+      const label = String(
+        option?.label ||
+          option?.name ||
+          option?.text ||
+          option?.title ||
+          option?.value ||
+          "",
+      )
+        .trim()
+        .toLowerCase();
+      if (!label) continue;
+      if (normalized.includes(label) || label.includes(normalized)) {
+        return option;
+      }
+    }
+
+    return null;
+  }
+
   async function handleActionPlan(actionPlan) {
     const actionKey = `${actionPlan?.action || "NONE"}:${String(
       actionPlan?.ttsContext || actionPlan?.reasoning || "",
@@ -1285,13 +1335,20 @@
         setFeedback(question, actionPlan);
         await speakReply(question);
         await new Promise((resolve) => window.setTimeout(resolve, 400));
+        scriptState.processing = false;
+        setProcessingState(false);
+        setStatus("Listening for clarification...");
+        setFeedback("Listening for clarification...");
+        if (scriptState.sessionActive && !scriptState.userInitiatedStop) {
+          resumeAudioCapture();
+        }
         return;
       }
 
       await announceAction(actionPlan);
       executeActionPlan(actionPlan);
     } finally {
-      if (scriptState.processing) {
+      if (scriptState.processing && !scriptState.pendingClarify) {
         endProcessingCycle();
       }
     }
@@ -1836,70 +1893,49 @@
       )
         ? pending.options || pending.choices || pending.clarifyOptions
         : pending.clarifyOptions || null;
-      if (options && options.length) {
-        const lowered = trimmedText.toLowerCase();
-        // Try numeric selection
-        const numberMatch = trimmedText.match(/\b(\d+)\b/);
-        let chosen = null;
-        if (numberMatch) {
-          const idx = Number(numberMatch[1]) - 1;
-          if (options[idx]) chosen = options[idx];
-        }
-        // Try label matching
-        if (!chosen) {
-          for (const opt of options) {
-            const label = String(
-              opt.label || opt.name || opt.text || opt.title || opt.value || "",
-            ).toLowerCase();
-            if (label && lowered.includes(label)) {
-              chosen = opt;
-              break;
-            }
-          }
+      const chosen = getClarificationChoice(trimmedText, options);
+
+      if (chosen) {
+        scriptState.pendingClarify = null;
+        setFeedback(
+          `Selected: ${chosen.label || chosen.name || chosen.text || chosen.value || "option"}`,
+        );
+        if (chosen.selector) {
+          showActionPlan({
+            action: "CLICK",
+            target: chosen.selector,
+            reason: "clarify selection",
+          });
+          return;
         }
 
-        if (chosen) {
-          // Clear pending
-          scriptState.pendingClarify = null;
-          setFeedback(
-            `Selected: ${chosen.label || chosen.name || chosen.text || chosen.value || "option"}`,
-          );
-          // If option includes selector, execute it directly
-          if (chosen.selector) {
-            showActionPlan({
-              action: "CLICK",
-              target: chosen.selector,
-              reason: "clarify selection",
-            });
-            return;
+        const followup = String(
+          chosen.label || chosen.name || chosen.text || chosen.value || "",
+        );
+        if (followup) {
+          if (
+            scriptState.socket &&
+            scriptState.socket.readyState === WebSocket.OPEN
+          ) {
+            scriptState.socket.send(
+              JSON.stringify({
+                type: "intent",
+                transcript: followup,
+                elements,
+                structured,
+                projectId: currentScript?.getAttribute("data-project-id") || "",
+              }),
+            );
+          } else {
+            postIntentToBackend(followup, elements, structured);
           }
-          // Otherwise, send follow-up to backend with chosen label
-          const followup = String(
-            chosen.label || chosen.name || chosen.text || chosen.value || "",
-          );
-          if (followup) {
-            if (
-              scriptState.socket &&
-              scriptState.socket.readyState === WebSocket.OPEN
-            ) {
-              scriptState.socket.send(
-                JSON.stringify({
-                  type: "intent",
-                  transcript: followup,
-                  elements,
-                  structured,
-                  projectId:
-                    currentScript?.getAttribute("data-project-id") || "",
-                }),
-              );
-            } else {
-              postIntentToBackend(followup, elements, structured);
-            }
-            return;
-          }
+          return;
         }
       }
-      // If not resolved, continue to send as normal transcript
+
+      if (scriptState.pendingClarify) {
+        scriptState.pendingClarify = null;
+      }
     }
     beginProcessingCycle();
     if (
