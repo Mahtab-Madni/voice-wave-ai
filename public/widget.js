@@ -647,6 +647,8 @@
     isExpanded: false,
     initChunk: null,
     initChunkLastSentAt: 0,
+    queuedActions: [],
+    executingQueuedActions: false,
   };
 
   const overlayId = "voice-widget-overlay";
@@ -1153,14 +1155,22 @@
       .toLowerCase();
     if (!normalized) return false;
 
-    const matchedOption = Array.from(selectElement.options || []).find((option) => {
-      const label = String(option.textContent || option.innerText || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      const value = String(option.value || "").trim().toLowerCase();
-      return label === normalized || value === normalized || label.includes(normalized);
-    });
+    const matchedOption = Array.from(selectElement.options || []).find(
+      (option) => {
+        const label = String(option.textContent || option.innerText || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        const value = String(option.value || "")
+          .trim()
+          .toLowerCase();
+        return (
+          label === normalized ||
+          value === normalized ||
+          label.includes(normalized)
+        );
+      },
+    );
 
     if (!matchedOption) return false;
 
@@ -1180,9 +1190,10 @@
       const target = actionPlan.target
         ? resolveActionTarget(actionPlan.target)
         : null;
-      const selectLabels = target?.tagName === "SELECT"
-        ? getSelectOptionLabels(target).join(", ")
-        : "";
+      const selectLabels =
+        target?.tagName === "SELECT"
+          ? getSelectOptionLabels(target).join(", ")
+          : "";
       const text = selectLabels || getVisibleTextFromElement(target);
       if (text) return summarizeVisibleText(text);
     }
@@ -1306,6 +1317,77 @@
     await new Promise((resolve) => window.setTimeout(resolve, 400));
   }
 
+  function normalizeQueuedActions(actionPlan) {
+    if (!actionPlan) return [];
+
+    if (Array.isArray(actionPlan)) return actionPlan.filter(Boolean);
+
+    const plan = actionPlan.plan || actionPlan.actions || actionPlan.steps;
+    if (Array.isArray(plan)) return plan.filter(Boolean);
+
+    if (actionPlan.action && actionPlan.action !== "NONE") return [actionPlan];
+
+    return [];
+  }
+
+  async function runQueuedActionPlan(actionPlan) {
+    const queuedActions = normalizeQueuedActions(actionPlan);
+    if (queuedActions.length === 0) return;
+
+    scriptState.queuedActions = queuedActions;
+    if (scriptState.executingQueuedActions) return;
+
+    scriptState.executingQueuedActions = true;
+
+    try {
+      while (scriptState.queuedActions.length > 0) {
+        const nextAction = scriptState.queuedActions.shift();
+        if (!nextAction || !nextAction.action || nextAction.action === "NONE") {
+          continue;
+        }
+
+        if (nextAction.action === "RESPOND") {
+          const message = nextAction.message || nextAction.ttsContext || "";
+          if (message) {
+            setFeedback(message, nextAction);
+            await speakReply(message);
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
+          }
+          continue;
+        }
+
+        if (nextAction.action === "CLARIFY") {
+          scriptState.pendingClarify = nextAction;
+          const question =
+            nextAction.message ||
+            nextAction.ttsContext ||
+            "Which option do you mean?";
+          setFeedback(question, nextAction);
+          await speakReply(question);
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
+          scriptState.processing = false;
+          setProcessingState(false);
+          setStatus("Listening for clarification...");
+          setFeedback("Listening for clarification...");
+          if (scriptState.sessionActive && !scriptState.userInitiatedStop) {
+            resumeAudioCapture();
+          }
+          break;
+        }
+
+        await announceAction(nextAction);
+        executeActionPlan(nextAction);
+        await new Promise((resolve) => window.setTimeout(resolve, 450));
+      }
+    } finally {
+      scriptState.executingQueuedActions = false;
+      scriptState.queuedActions = [];
+      if (scriptState.processing && !scriptState.pendingClarify) {
+        endProcessingCycle();
+      }
+    }
+  }
+
   function getClarificationChoice(transcript, options = []) {
     if (!Array.isArray(options) || options.length === 0) return null;
 
@@ -1414,8 +1496,7 @@
         return;
       }
 
-      await announceAction(actionPlan);
-      executeActionPlan(actionPlan);
+      await runQueuedActionPlan(actionPlan);
     } finally {
       if (scriptState.processing && !scriptState.pendingClarify) {
         endProcessingCycle();
@@ -2335,7 +2416,9 @@
         ) {
           scriptState.listening = false;
           setListeningState(false);
-          void speakReply("Sorry, I didn't catch that. Click the mic to try again.");
+          void speakReply(
+            "Sorry, I didn't catch that. Click the mic to try again.",
+          );
           setFeedback("Speech recognition failed. Click the mic to try again.");
         }
       };
