@@ -74,6 +74,13 @@ function getSession(sessions, clientId, socket) {
 function closeDeepgramConnection(session) {
   if (!session.deepgramConnection) return;
   const connection = session.deepgramConnection;
+  // Detach the reference first. Anything that fires on `connection`
+  // after this point (including an internal auto-reconnect from the
+  // underlying ReconnectingWebSocket transport) will find
+  // session.deepgramConnection no longer === connection, and the
+  // guards below will kill it again instead of letting it live on.
+  session.deepgramConnection = null;
+
   try {
     if (typeof connection.close === "function") {
       connection.close();
@@ -82,8 +89,14 @@ function closeDeepgramConnection(session) {
     }
   } catch (error) {
     console.warn("[ws] failed to close Deepgram connection", error.message);
-  } finally {
-    session.deepgramConnection = null;
+  }
+
+  try {
+    if (typeof connection.removeAllListeners === "function") {
+      connection.removeAllListeners();
+    }
+  } catch (error) {
+    console.warn("[ws] failed to remove Deepgram listeners", error.message);
   }
 }
 
@@ -107,18 +120,29 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     throw new Error("Deepgram live connection is not available");
   }
 
+  // This guard is the actual fix for the open/close loop. If the
+  // underlying transport auto-reconnects after we've already told the
+  // session to close (stop/pause), session.deepgramConnection no longer
+  // points at this object — so we kill the zombie immediately instead
+  // of letting it live, log, and potentially forward stale transcripts.
+  const isStale = () => session.deepgramConnection !== connection;
+
   connection.on("open", () => {
+    if (isStale()) {
+      try {
+        connection.close?.();
+        connection.removeAllListeners?.();
+      } catch (e) {}
+      return;
+    }
     console.log("[ws] Deepgram live connection opened");
   });
 
   connection.on("message", (data) => {
-    console.log("[deepgram] message received:", data?.type, data);
+    if (isStale()) return; // don't process transcripts from a dead connection
     const alternative = data?.channel?.alternatives?.[0];
     const transcript = String(alternative?.transcript || "").trim();
-
-    if (!transcript || !(data?.is_final && data?.speech_final)) {
-      return;
-    }
+    if (!transcript || !(data?.is_final && data?.speech_final)) return;
 
     session.transcripts.push(transcript);
     try {
@@ -137,13 +161,8 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     }
   });
 
-  if (connection.socket && typeof connection.socket.on === "function") {
-    connection.socket.on("message", (raw) => {
-      console.log("[deepgram] RAW socket message:", raw.toString().slice(0, 300));
-    });
-}
-
   connection.on("error", (error) => {
+    if (isStale()) return;
     console.error("[ws] Deepgram stream error", error);
     try {
       socket.send(
@@ -153,11 +172,8 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
           message: "Deepgram stream error",
         }),
       );
-    } catch (error) {
-      console.warn(
-        "[ws] failed to send Deepgram error to client",
-        error.message,
-      );
+    } catch (e) {
+      console.warn("[ws] failed to send Deepgram error to client", e.message);
     }
   });
 
@@ -165,15 +181,16 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     if (session.deepgramConnection === connection) {
       session.deepgramConnection = null;
     }
+    if (isStale()) return; // don't log every reconnect-loop tick
     console.log("[ws] Deepgram live connection closed");
   });
 
   connection.connect();
   await Promise.race([
     connection.waitForOpen(),
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("Deepgram open timed out")), 5000);
-    }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Deepgram open timed out")), 5000),
+    ),
   ]);
 
   return connection;
@@ -348,20 +365,7 @@ export function setupVoiceWebSocket(server, config = {}) {
       if (session.flushTimer) {
         clearTimeout(session.flushTimer);
       }
-      if (session.deepgramConnection) {
-        try {
-          if (typeof session.deepgramConnection.close === "function") {
-            session.deepgramConnection.close();
-          } else if (typeof session.deepgramConnection.finish === "function") {
-            session.deepgramConnection.finish();
-          }
-        } catch (error) {
-          console.warn(
-            "[ws] failed to close Deepgram connection",
-            error.message,
-          );
-        }
-      }
+      closeDeepgramConnection(session);
       sessions.delete(clientId);
     });
   });
