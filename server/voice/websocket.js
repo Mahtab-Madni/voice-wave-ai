@@ -73,9 +73,38 @@ function getSession(sessions, clientId, socket) {
       // automatic reconnect or be left alone.
       desiredStreaming: false,
       keepAliveTimer: null,
+      pendingAudioChunks: [],
     });
   }
   return sessions.get(clientId);
+}
+
+export function bufferAudioChunk(session, chunk) {
+  if (!session || !chunk) return;
+
+  session.pendingAudioChunks = session.pendingAudioChunks || [];
+  session.pendingAudioChunks.push(chunk);
+
+  while (session.pendingAudioChunks.length > 60) {
+    session.pendingAudioChunks.shift();
+  }
+}
+
+export function flushPendingAudioChunks(session, connection) {
+  if (!session || !connection) return;
+
+  const pendingChunks = session.pendingAudioChunks || [];
+  if (pendingChunks.length === 0) return;
+
+  for (const chunk of pendingChunks) {
+    try {
+      connection.sendMedia(chunk);
+    } catch (error) {
+      console.warn("[ws] failed to flush buffered audio chunk", error.message);
+    }
+  }
+
+  session.pendingAudioChunks = [];
 }
 
 function stopKeepAlive(session) {
@@ -111,6 +140,7 @@ function closeDeepgramConnection(session) {
   // before session.deepgramConnection has been assigned to it.
   session.deepgramGeneration += 1;
   stopKeepAlive(session);
+  session.pendingAudioChunks = [];
 
   if (!session.deepgramConnection) return;
   const connection = session.deepgramConnection;
@@ -171,6 +201,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     }
     console.log("[ws] Deepgram live connection opened");
     startKeepAlive(session, connection);
+    flushPendingAudioChunks(session, connection);
   });
 
   connection.on("message", (data) => {
@@ -269,6 +300,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
     );
   }
 
+  flushPendingAudioChunks(session, connection);
   return connection;
 }
 
@@ -308,6 +340,8 @@ export function setupVoiceWebSocket(server, config = {}) {
               error.message,
             );
           }
+        } else if (session.desiredStreaming) {
+          bufferAudioChunk(session, data);
         }
         console.debug("[ws] received audio chunk", {
           latestSize: data.byteLength || data.length || 0,
