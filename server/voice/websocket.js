@@ -112,6 +112,7 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
   });
 
   connection.on("message", (data) => {
+    console.log("[deepgram] message received:", data?.type, data);
     const alternative = data?.channel?.alternatives?.[0];
     const transcript = String(alternative?.transcript || "").trim();
 
@@ -135,6 +136,12 @@ async function createDeepgramStream(session, socket, deepgramApiKey) {
       );
     }
   });
+
+  if (connection.socket && typeof connection.socket.on === "function") {
+    connection.socket.on("message", (raw) => {
+      console.log("[deepgram] RAW socket message:", raw.toString().slice(0, 300));
+    });
+}
 
   connection.on("error", (error) => {
     console.error("[ws] Deepgram stream error", error);
