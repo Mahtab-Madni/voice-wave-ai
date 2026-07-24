@@ -3,7 +3,12 @@ import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
 const EXECUTION_ROUTING_SYSTEM_PROMPT = `You are the execution routing brain of an AI-powered web automation assistant. Your task is to match a natural-language command to the best interactive element or system action on the screen and produce an ordered execution plan.
 
 Rules:
-1. Target Element Matching:
+1. Project and Identity Questions:
+  - If the user asks about the project, the website, or what the project is about, answer directly with a RESPOND action and use the provided projectContext as the main source of truth.
+  - If the user asks to introduce yourself, say that you are an automation agent for the current project and mention the project name and description from projectContext when available.
+  - For these questions, do not force a click or other DOM action. A direct informational answer is preferred.
+
+2. Target Element Matching:
   - Prefer direct matches by visible text, aria-label, id, placeholder, or class tokens that clearly map to the command.
   - If several elements share the same label, use their contextText (surrounding parent container header/title text), spatial coordinates, and surrounding hierarchy to choose the element in the requested visual group.
   - Use fuzzy semantic equivalence for intent phrasing (for example, "go to checkout" can match cart, checkout, proceed to pay, payment links, or buttons labeled "Pay").
@@ -337,6 +342,48 @@ function buildProjectContext(projectConfig = {}) {
   return parts.join(" | ");
 }
 
+function buildProjectContextResponse(transcript, projectConfig = {}) {
+  const normalizedTranscript = normalizeText(transcript || "");
+  if (!normalizedTranscript) return null;
+
+  const config =
+    projectConfig && typeof projectConfig === "object" ? projectConfig : {};
+  const projectName = String(config.projectName || config.name || "").trim();
+  const description = String(
+    config.websiteDescription || config.description || "",
+  ).trim();
+
+  const isProjectQuestion =
+    /what is (my )?(this )?project about|what does (my )?(this )?project do|tell me about (my )?(this )?project|about (my )?(this )?project|project description/i.test(
+      normalizedTranscript,
+    );
+
+  const isIntroductionQuestion =
+    /introduce yourself|who are you|what can you do|what are you/i.test(
+      normalizedTranscript,
+    );
+
+  if (!isProjectQuestion && !isIntroductionQuestion) return null;
+
+  const projectLabel = projectName || "this project";
+  const descriptionText = description ? `It is ${description}.` : "";
+
+  if (isIntroductionQuestion) {
+    const intro = projectName
+      ? `I’m an automation agent for ${projectLabel}. ${descriptionText}`.trim()
+      : "I’m an automation agent for this project.";
+    return intro.replace(/\s+/g, " ").trim();
+  }
+
+  if (projectName || description) {
+    return description
+      ? `Your project is ${projectLabel}. ${descriptionText}`.trim()
+      : `Your project is ${projectLabel}.`;
+  }
+
+  return "I don’t have project details available yet.";
+}
+
 function resolveActionTargetLabel(actionPlan, elements = []) {
   const targetSelector = actionPlan?.target || actionPlan?.selector || null;
   const targetEntry = Array.isArray(elements)
@@ -497,6 +544,12 @@ async function generateTtsContext(
               action: actionPlan?.action || "CLICK",
               target: actionPlan?.target || null,
               targetText: actionPlan?.reasoning || null,
+              projectContext: buildProjectContext(
+                options.projectConfig ||
+                  options.projectContext ||
+                  options.context ||
+                  {},
+              ),
               conversationContext: buildConversationContextPrompt(
                 options.conversationContext || "",
               ),
@@ -628,7 +681,7 @@ function scoreElementRelevance(
   return { score, reason };
 }
 
-export function buildRuleBasedActionPlan(transcript, elements) {
+export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
   const normalizedTranscript = normalizeText(transcript);
   if (!normalizedTranscript) {
     return {
@@ -641,6 +694,23 @@ export function buildRuleBasedActionPlan(transcript, elements) {
 
   const commandKeywords = getCommandKeywords(normalizedTranscript);
   const semanticSignals = getSemanticSignals(normalizedTranscript);
+
+  const projectContextResponse = buildProjectContextResponse(
+    normalizedTranscript,
+    options?.projectConfig || options?.projectContext || options?.context || {},
+  );
+
+  if (projectContextResponse) {
+    return {
+      action: "RESPOND",
+      target: null,
+      value: null,
+      message: projectContextResponse,
+      scrollRequired: false,
+      confidence: 0.96,
+      reasoning: "Used project context for an informational response.",
+    };
+  }
 
   if (/go back|previous page|back page|back/i.test(normalizedTranscript)) {
     return {
@@ -1082,7 +1152,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     .map(({ relevanceScore, ...el }) => el)
     .slice(0, 20);
 
-  const fallback = buildRuleBasedActionPlan(transcript, elements);
+  const fallback = buildRuleBasedActionPlan(transcript, elements, options);
   const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
     GROQ_API_KEY: options.apiKey,
   });

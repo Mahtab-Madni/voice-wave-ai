@@ -46,3 +46,27 @@ test("buildRuleBasedActionPlan preserves a concise summary phrase", () => {
   assert.equal(summaryAction.action, "SUMMARIZE_PAGE");
   assert.match(summaryPhrase, /brief|summary|page/i);
 });
+
+test("buildRuleBasedActionPlan uses project context for project questions", () => {
+  const plan = buildRuleBasedActionPlan("what is my project about", [], {
+    projectConfig: {
+      projectName: "Acme Commerce",
+      websiteDescription: "A storefront for selling handmade goods",
+    },
+  });
+
+  assert.equal(plan.action, "RESPOND");
+  assert.match(plan.message, /Acme Commerce|handmade goods/i);
+});
+
+test("buildRuleBasedActionPlan introduces itself with project context", () => {
+  const plan = buildRuleBasedActionPlan("introduce yourself", [], {
+    projectConfig: {
+      projectName: "Acme Commerce",
+      websiteDescription: "A storefront for selling handmade goods",
+    },
+  });
+
+  assert.equal(plan.action, "RESPOND");
+  assert.match(plan.message, /automation agent|Acme Commerce/i);
+});
