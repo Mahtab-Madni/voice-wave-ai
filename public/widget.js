@@ -638,6 +638,8 @@
     pendingAudioControlProjectId: null,
     audioControlState: "idle",
     transcriptDispatchInFlight: new Set(),
+    recognitionShutdownAt: 0,
+    pendingSpeechRestartTimer: null,
     transcriptionMode: "browser",
     lastSpokenMessageKey: "",
     lastSpokenAt: 0,
@@ -2047,11 +2049,34 @@
     });
 
     if (scriptState.transcriptionMode === "browser") {
-      const restarted = startRecognition();
-      if (restarted) {
-        scriptState.listening = true;
-        setListeningState(true);
-        setStatus("Listening");
+      if (scriptState.pendingSpeechRestartTimer) {
+        window.clearTimeout(scriptState.pendingSpeechRestartTimer);
+        scriptState.pendingSpeechRestartTimer = null;
+      }
+
+      const now = Date.now();
+      const elapsedSinceShutdown =
+        now - (scriptState.recognitionShutdownAt || 0);
+      const restartDelay =
+        elapsedSinceShutdown < 250 ? 250 - elapsedSinceShutdown : 0;
+
+      const attemptStart = () => {
+        scriptState.pendingSpeechRestartTimer = null;
+        const restarted = startRecognition();
+        if (restarted) {
+          scriptState.listening = true;
+          setListeningState(true);
+          setStatus("Listening");
+        }
+      };
+
+      if (restartDelay > 0) {
+        scriptState.pendingSpeechRestartTimer = window.setTimeout(
+          attemptStart,
+          restartDelay,
+        );
+      } else {
+        attemptStart();
       }
       return;
     }
@@ -2733,6 +2758,10 @@
       window.clearTimeout(scriptState.pendingTranscriptTimer);
       scriptState.pendingTranscriptTimer = null;
     }
+    if (scriptState.pendingSpeechRestartTimer) {
+      window.clearTimeout(scriptState.pendingSpeechRestartTimer);
+      scriptState.pendingSpeechRestartTimer = null;
+    }
     clearSilenceTimer();
     stopAudioMonitoring();
     if (scriptState.recognition) {
@@ -2747,6 +2776,7 @@
         console.warn("[voice-widget] failed to stop recognition", error);
       }
       scriptState.recognition = null;
+      scriptState.recognitionShutdownAt = Date.now();
     }
     scriptState.latestTranscript = "";
     scriptState.lastProcessedTranscript = "";
