@@ -118,6 +118,12 @@ router.post("/process-intent", async (req, res) => {
 
   const action = await buildActionPlan(transcript, elements, {
     projectConfig,
+    apiKey: process.env.GROQ_API_KEY || "",
+    baseUrl: process.env.OPENAI_BASE_URL || "https://api.groq.com/openai/v1",
+    model:
+      process.env.GROQ_CHAT_MODEL ||
+      process.env.OPENAI_MODEL ||
+      "openai/gpt-oss-120b",
   });
   const previewElements = elements.slice(0, 12).map((entry) => ({
     ...entry,

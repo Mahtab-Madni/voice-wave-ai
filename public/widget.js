@@ -2177,8 +2177,16 @@
         }),
       });
       const data = await response.json().catch(() => ({}));
-      const actionPlan =
-        data?.action || domParser.buildExecutionPlan(transcript, elements);
+      const hasUsefulPlan =
+        Boolean(data?.action && data.action !== "NONE") ||
+        Boolean(data?.plan?.length) ||
+        Boolean(data?.actions?.length) ||
+        Boolean(data?.steps?.length);
+      const actionPlan = hasUsefulPlan
+        ? data
+        : data?.action && data.action === "NONE"
+          ? domParser.buildExecutionPlan(transcript, elements)
+          : data?.action || domParser.buildExecutionPlan(transcript, elements);
       console.log(
         "[voice-widget] intent execution pipeline data payload:",
         data,
