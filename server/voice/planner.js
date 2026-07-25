@@ -512,6 +512,12 @@ async function generateTtsContext(
     process.env.GROQ_CHAT_MODEL ||
     process.env.OPENAI_MODEL ||
     "llama-3.3-70b-versatile";
+     const baseUrl =
+       options.baseUrl ||
+       process.env.OPENAI_BASE_URL ||
+       (process.env.OPENAI_API_KEY
+         ? "https://api.openai.com/v1"
+         : "https://api.groq.com/openai/v1");
 
   try {
     const isSummaryAction =
