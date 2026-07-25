@@ -2714,10 +2714,11 @@
 
     scriptState.sessionActive = true;
     scriptState.audioControlState = "start";
-    sendSocketPayload({ type: "audio-control", state: "start" });
     scriptState.userInitiatedStop = false;
     scriptState.processing = false;
+    scriptState.listening = false;
     openSocket();
+    sendSocketPayload({ type: "audio-control", state: "start" });
     setListeningState(false);
     setStatus("Requesting microphone access...");
     setFeedback("Requesting microphone access...");
@@ -2757,7 +2758,6 @@
     scriptState.sessionActive = false;
     scriptState.userInitiatedStop = true;
     scriptState.audioControlState = "stop";
-    sendSocketPayload({ type: "audio-control", state: "stop" });
     scriptState.processing = false;
     setProcessingState(false);
     clearSilenceTimer();
@@ -2770,8 +2770,13 @@
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state !== "inactive"
     ) {
-      scriptState.mediaRecorder.stop();
+      try {
+        scriptState.mediaRecorder.stop();
+      } catch (error) {
+        console.warn("[voice-widget] error stopping media recorder", error);
+      }
     }
+    scriptState.mediaRecorder = null;
     if (scriptState.stream) {
       scriptState.stream.getTracks().forEach((track) => track.stop());
       scriptState.stream = null;
@@ -2779,11 +2784,17 @@
     stopRecognition();
     setListeningState(false);
 
+    sendSocketPayload({ type: "audio-control", state: "stop" });
+
     if (
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
     ) {
-      scriptState.socket.close();
+      try {
+        scriptState.socket.close();
+      } catch (error) {
+        console.warn("[voice-widget] could not close socket cleanly", error);
+      }
     }
     scriptState.socket = null;
 
