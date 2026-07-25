@@ -1139,6 +1139,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
 
     const data = JSON.parse(responseText || "{}");
     const content = data?.choices?.[0]?.message?.content || "{}";
+    console.log("[planner][raw] LLM content:", String(content).slice(0, 1024));
     let parsedActionPlan;
     try {
       parsedActionPlan =
@@ -1151,7 +1152,15 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       );
     }
 
+    console.log(
+      "[planner][parsed] action plan:",
+      JSON.stringify(parsedActionPlan).slice(0, 1024),
+    );
     const normalizedActionPlan = normalizeActionPlan(parsedActionPlan);
+    console.log(
+      "[planner][normalized] action plan:",
+      JSON.stringify(normalizedActionPlan).slice(0, 1024),
+    );
     const ttsContext = await generateTtsContext(
       transcript,
       normalizedActionPlan,
