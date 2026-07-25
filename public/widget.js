@@ -2197,6 +2197,13 @@
   }
 
   function sendSocketPayload(payload) {
+    if (payload?.type === "audio-control") {
+      const projectId = currentScript?.getAttribute("data-project-id") || "";
+      if (projectId) {
+        payload = { ...payload, projectId };
+      }
+    }
+
     if (
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
