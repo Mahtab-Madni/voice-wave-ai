@@ -64,6 +64,11 @@ async function updateProjectMetrics(projectId, event) {
       ...project.usageMetrics,
       ...nextMetrics,
     };
+
+    if (event?.type === "llm_call" && project.isConnected !== true) {
+      project.isConnected = true;
+    }
+
     await project.save();
   } catch (error) {
     console.warn(
