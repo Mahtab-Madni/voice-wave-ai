@@ -1323,7 +1323,10 @@
     if (Array.isArray(actionPlan)) return actionPlan.filter(Boolean);
 
     const plan = actionPlan.plan || actionPlan.actions || actionPlan.steps;
-    if (Array.isArray(plan)) return plan.filter(Boolean);
+    if (Array.isArray(plan)) {
+      const filtered = plan.filter(Boolean);
+      if (filtered.length > 0) return filtered;
+    }
 
     if (actionPlan.action && actionPlan.action !== "NONE") return [actionPlan];
 
