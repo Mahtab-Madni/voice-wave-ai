@@ -2105,6 +2105,8 @@
       return;
     }
     if (scriptState.sessionActive && !scriptState.listening) {
+      setStatus("Resuming...");
+      setFeedback("Resuming listening...");
       resumeAudioCapture();
       return;
     }
@@ -2535,13 +2537,51 @@
 
       recognition.onerror = (event) => {
         console.warn("[voice-widget] recognition error", event.error);
-        setStatus(`Recognition error: ${event.error}`);
+
+        // Ignore events from an instance that's already been superseded
+        // (e.g. the old instance aborted by pauseAudioCapture/stopRecognition).
         if (
-          scriptState.listening &&
-          scriptState.transcriptionMode === "browser" &&
-          scriptState.recognition === recognition &&
-          scriptState.recognitionSessionId === recognitionSessionId
+          scriptState.recognition !== recognition ||
+          scriptState.recognitionSessionId !== recognitionSessionId
         ) {
+          return;
+        }
+
+        setStatus(`Recognition error: ${event.error}`);
+
+        // "no-speech" is Chrome's own silence timeout, and "aborted" can be
+        // this exact instance being intentionally stopped moments before a
+        // deliberate restart. Neither means the session actually failed —
+        // if we're still supposed to be listening, just restart quietly
+        // instead of ending the session and asking the user to click the
+        // mic again.
+        const RECOVERABLE_ERRORS = new Set(["no-speech", "aborted"]);
+        if (
+          RECOVERABLE_ERRORS.has(event.error) &&
+          scriptState.sessionActive &&
+          !scriptState.userInitiatedStop &&
+          !scriptState.processing
+        ) {
+          window.setTimeout(() => {
+            if (
+              !scriptState.sessionActive ||
+              scriptState.userInitiatedStop ||
+              scriptState.processing
+            ) {
+              return; // state changed while we were waiting to restart
+            }
+            const restarted = startRecognition();
+            if (restarted) {
+              scriptState.listening = true;
+              setListeningState(true);
+              setStatus("Listening");
+              setFeedback("Listening ...");
+            }
+          }, 250);
+          return;
+        }
+
+        if (scriptState.listening) {
           scriptState.listening = false;
           setListeningState(false);
           void speakReply(
