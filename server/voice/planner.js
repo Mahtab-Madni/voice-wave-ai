@@ -1,29 +1,15 @@
 import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
 
-const EXECUTION_ROUTING_SYSTEM_PROMPT = `You are the execution routing brain of an AI-powered web automation assistant. Your task is to match a natural-language command to the best interactive element or system action on the screen and produce an ordered execution plan.
+const EXECUTION_ROUTING_SYSTEM_PROMPT = `You are the execution routing brain of an AI-powered web automation assistant. Your task is to match a natural-language command to the best interactive element or system action on the screen and declare exactly one action to take.
 
 Rules:
-1. Project and Identity Questions:
-  - If the user asks about the project, the website, or what the project is about, answer directly with a RESPOND action and use the provided projectContext as the main source of truth.
-  - If the user asks to introduce yourself, say that you are an automation agent for the current project and mention the project name and description from projectContext when available.
-  - For these questions, do not force a click or other DOM action. A direct informational answer is preferred.
-
-2. Target Element Matching:
+1. Target Element Matching:
   - Prefer direct matches by visible text, aria-label, id, placeholder, or class tokens that clearly map to the command.
   - If several elements share the same label, use their contextText (surrounding parent container header/title text), spatial coordinates, and surrounding hierarchy to choose the element in the requested visual group.
   - Use fuzzy semantic equivalence for intent phrasing (for example, "go to checkout" can match cart, checkout, proceed to pay, payment links, or buttons labeled "Pay").
-  - For navigation requests like "go to products" or "open contact", first inspect the visible navigation/menu elements in the DOM and prefer a matching CLICK on those elements when one exists; do not invent a route like "/product-page" unless the user explicitly provided a URL/path.
   - Use project context/description and recent conversation context as strong signals to disambiguate intent and preserve the user's flow (for example, prefer elements in the same card or form recently referenced).
 
-2. Multi-Step Planning:
-  - If the user asks for more than one action, break the request into a sequence of ordered steps and return them as a JSON array under the field "plan".
-  - The first item in the plan should be the first action to execute, the second item the next, and so on.
-  - For compound requests like "click the cart button then go to payment" or "open the menu and then select settings", produce a plan with multiple actions in the correct order.
-  - Each plan entry should be a normal action object with the same fields as the single-action schema.
-  - If the request is simple and only needs one action, you may return a single action object directly, or optionally a one-item plan array.
-  - If the command is informational only, return a RESPOND action; if it needs multiple steps, you may return a plan array containing a RESPOND step and subsequent actions when helpful.
-
-3. Action Rules & Parameter Mapping:
+2. Action Rules & Parameter Mapping:
   - CLICK: Set target to element CSS selector.
   - TYPE: Set target to element selector, value to the text to type.
   - CLEAR_INPUT: Set target to input/textarea element selector.
@@ -33,32 +19,31 @@ Rules:
   - SCROLL: Set target to null (or specific scrollable container), direction to "up" or "down", amount to scroll distance in pixels (for example, 400 or 600).
   - ZOOM: Set target to null, direction to "in", "out", or "reset", amount to scale factor (for example, 1.25 for in, 0.8 for out, 1.0 for reset).
   - PRESS_KEY: Set target to focused element selector or null, value to key name (for example, "Enter", "Escape", "Tab").
-  - NAVIGATE: Set target to null, value to target URL or path. Use this only when the user explicitly provided a URL/path or the page clearly requires a browser navigation event; otherwise prefer a CLICK on a visible navigation element.
+  - NAVIGATE: Set target to null, value to target URL or path.
   - GO_BACK / GO_FORWARD / RELOAD / SUMMARIZE_PAGE: Set target to null.
   - RESPOND: Use when the user requests an informational answer (no DOM interaction). Set message to a concise human-readable summary for display and TTS. Optionally provide ttsContext for improved speech output.
   - CLARIFY: Use when multiple plausible targets or missing information prevent a safe single action. Return clarifyOptions as an array of { label: string, selector: string } or choices; set message to an instruction the UI can speak/display. Do not attempt an interaction when emitting CLARIFY.
 
-4. Data & Table Intelligence:
+3. Data & Table Intelligence:
   - When the user asks about tabular data, numeric comparisons, or form requirements (for example, "Which plan is cheapest?" or "What does this form require?"), prefer RESPOND and use the provided structured payload (structured.tables, structured.grids) when available.
   - When structured payload includes parsed numeric values (number, percent, currency), rely on those typed values for comparisons, sorting, and numeric reasoning rather than raw text.
   - If an answer requires showing a brief summary, return RESPOND with a short message and include any small data pointers in reasoning or ttsContext.
 
-5. Clarification Flow:
+4. Clarification Flow:
   - Emit CLARIFY when there are two or more reasonable targets, when a user request is underspecified, or when choosing a target could have destructive side-effects.
   - CLARIFY payload shape: set action to "CLARIFY", message to a short human prompt, and clarifyOptions to an array of option objects, each with label and selector (or value for non-element choices). Example: { "action":"CLARIFY", "message":"Which shipping option should I choose?", "clarifyOptions":[{"label":"Standard - 5 days","selector":"#shipping-standard"},{"label":"Express - 2 days","selector":"#shipping-express"}], "target":null }
 
-6. Overlay & Modal Considerations:
+5. Overlay & Modal Considerations:
   - If the requested interaction may be blocked by overlays, modals, or dialogs, set scrollRequired appropriately and include an explanatory message so the client can attempt safe dismissal (the front-end will call its dismissal helper before executing actions).
   - Do not attempt to click hidden or offscreen elements without indicating scrollRequired: true.
 
-7. Safety & Ordering Rule:
-  - Prefer safe, sequential execution. Do not assume a later step can happen before an earlier one completes.
+6. Safety & Single-Action Rule:
+  - Emit exactly ONE action per turn. Do not bundle multiple actions into a single response.
   - If no safe single action is possible, return { action: "NONE", confidence: 0, target: null } and a brief reasoning explaining why.
 
 Output Format:
-Return strict JSON only matching this schema. For multi-step requests, include a top-level field "plan" whose value is an array of action objects. Each action object should follow the same schema as the single-step action. Unused fields for a given action MUST be set to null. Include clarifyOptions and ttsContext when relevant.
-Example multi-step response:
-{"plan":[{"action":"CLICK","target":"#cart-button","value":null,"message":null,"direction":null,"amount":null,"scrollRequired":false,"confidence":0.9,"reasoning":"Open the cart first.","ttsContext":"Opening the cart.","clarifyOptions":null},{"action":"NAVIGATE","target":null,"value":"/checkout","message":null,"direction":null,"amount":null,"scrollRequired":false,"confidence":0.9,"reasoning":"Continue to the payment page.","ttsContext":"Going to the payment page.","clarifyOptions":null}]}
+Return strict JSON only matching this schema. Unused fields for a given action MUST be set to null. Include clarifyOptions and ttsContext when relevant:
+{"action":"CLICK|RESPOND|CLARIFY|SCROLL|TYPE|ZOOM|GO_BACK|GO_FORWARD|RELOAD|NAVIGATE|PRESS_KEY|SELECT_OPTION|CLEAR_INPUT|HOVER|HIGHLIGHT_ELEMENT|FOCUS|READ_TEXT|SUMMARIZE_PAGE|NONE","target":"CSS selector or null","value":"string or null","message":"string or null (human-readable text to display)","direction":"up|down|in|out|reset|null","amount":600,"scrollRequired":false,"confidence":0.0,"reasoning":"short explanation","ttsContext":null,"clarifyOptions":null}
 
 Notes:
  - RESPOND: Use this action when the instruction is informational (no DOM interaction). Set message to a concise natural-language summary intended for display and speech. When possible, base RESPOND answers on the structured data payload and prefer parsed numeric fields for comparisons.
@@ -143,115 +128,6 @@ function getRotatedApiKeyFromEnv(envVarName, options = {}) {
   return String(globalThis.__voiceApiKeyRotators[envVarName]()).trim();
 }
 
-function resolveLlmSettings(options = {}) {
-  const explicitKey = String(
-    options.apiKey || options.groqApiKey || options.openaiApiKey || "",
-  ).trim();
-  const openAiKey = String(
-    options.openaiApiKey || process.env.OPENAI_API_KEY || "",
-  ).trim();
-  const groqKey = String(
-    options.groqApiKey || process.env.GROQ_API_KEY || "",
-  ).trim();
-  const configuredKey = explicitKey || openAiKey || groqKey || "";
-  const apiKey = normalizeApiKeys(configuredKey)[0] || "";
-  const baseUrl = String(
-    options.baseUrl ||
-      process.env.OPENAI_BASE_URL ||
-      process.env.GROQ_BASE_URL ||
-      "",
-  ).trim();
-  const inferredBaseUrl =
-    baseUrl ||
-    (openAiKey
-      ? "https://api.openai.com/v1"
-      : groqKey
-        ? "https://api.groq.com/openai/v1"
-        : "");
-  const model = String(
-    options.model ||
-      process.env.OPENAI_MODEL ||
-      process.env.GROQ_CHAT_MODEL ||
-      "gpt-4o-mini",
-  ).trim();
-
-  return {
-    apiKey,
-    baseUrl: inferredBaseUrl,
-    model,
-    provider: openAiKey ? "openai" : groqKey ? "groq" : "none",
-  };
-}
-
-function getFallbackModels(model, provider) {
-  const normalizedModel = String(model || "").trim();
-  const normalizedProvider = String(provider || "").toLowerCase();
-
-  if (normalizedProvider === "groq") {
-    const preferred = normalizedModel;
-    const candidates = [
-      preferred,
-      "llama-3.3-70b-versatile",
-      "llama-3.1-8b-instant",
-    ];
-    return [...new Set(candidates.filter(Boolean))];
-  }
-
-  if (normalizedProvider === "openai") {
-    const preferred = normalizedModel;
-    const candidates = [preferred, "gpt-4o-mini", "gpt-4.1-mini"];
-    return [...new Set(candidates.filter(Boolean))];
-  }
-
-  return [normalizedModel || "gpt-4o-mini"].filter(Boolean);
-}
-
-async function callLlmWithFallback(payload, llmConfig) {
-  const { apiKey, baseUrl, model, provider } = llmConfig;
-  const modelsToTry = getFallbackModels(model, provider);
-
-  let lastError = null;
-
-  for (let index = 0; index < modelsToTry.length; index += 1) {
-    const modelToTry = modelsToTry[index];
-    const requestBody = {
-      ...payload,
-      model: modelToTry,
-    };
-
-    try {
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        const message = errorText || `LLM request failed: ${response.status}`;
-        lastError = new Error(message);
-        if (response.status >= 500 || response.status === 400) {
-          continue;
-        }
-        throw new Error(message);
-      }
-
-      const data = await response.json();
-      return { data, model: modelToTry };
-    } catch (error) {
-      lastError = error;
-      if (index === modelsToTry.length - 1) {
-        throw error;
-      }
-    }
-  }
-
-  throw lastError || new Error("LLM request failed");
-}
-
 function getCommandKeywords(transcript) {
   const tokens = normalizeText(transcript).split(/\s+/);
   const stopWords = new Set([
@@ -309,37 +185,17 @@ function extractNavigationTarget(transcript) {
   const explicitUrl = transcript.match(/https?:\/\/[^\s]+/i)?.[0];
   if (explicitUrl) return explicitUrl;
 
-  const explicitPath = transcript.match(/(?:to|for)\s+(\/[^\s]+)/i)?.[1];
-  if (explicitPath) return explicitPath;
-
-  return null;
-}
-
-function findVisibleNavigationTarget(transcript, elements = []) {
-  const normalizedTranscript = normalizeText(transcript);
-  const sectionKeywords =
-    /products|pricing|about|contact|shop|home|blog|docs|login|signup|register|support|help/i;
-
-  if (!sectionKeywords.test(normalizedTranscript)) return null;
-
-  return (
-    (elements || []).find((entry) => {
-      const label = normalizeText(
-        [
-          entry?.text,
-          entry?.ariaLabel,
-          entry?.placeholder,
-          entry?.id,
-          entry?.title,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
-
-      if (!label) return false;
-      return sectionKeywords.test(label);
-    }) || null
+  const namedTarget = transcript.match(
+    /(?:go to|navigate to|open|visit|go to the|open the)\s+(?:the\s+)?([a-z0-9./_-]+(?:\s+[a-z0-9./_-]+)*)/i,
   );
+  if (namedTarget?.[1]) {
+    const normalizedTarget = namedTarget[1].trim().replace(/\s+/g, "-");
+    return normalizedTarget.startsWith("/")
+      ? normalizedTarget
+      : `/${normalizedTarget}`;
+  }
+
+  return "/";
 }
 
 function extractPressedKey(transcript) {
@@ -472,48 +328,6 @@ function buildProjectContext(projectConfig = {}) {
   return parts.join(" | ");
 }
 
-function buildProjectContextResponse(transcript, projectConfig = {}) {
-  const normalizedTranscript = normalizeText(transcript || "");
-  if (!normalizedTranscript) return null;
-
-  const config =
-    projectConfig && typeof projectConfig === "object" ? projectConfig : {};
-  const projectName = String(config.projectName || config.name || "").trim();
-  const description = String(
-    config.websiteDescription || config.description || "",
-  ).trim();
-
-  const isProjectQuestion =
-    /what is (my )?(this )?project about|what does (my )?(this )?project do|tell me about (my )?(this )?project|about (my )?(this )?project|project description/i.test(
-      normalizedTranscript,
-    );
-
-  const isIntroductionQuestion =
-    /introduce yourself|who are you|what can you do|what are you/i.test(
-      normalizedTranscript,
-    );
-
-  if (!isProjectQuestion && !isIntroductionQuestion) return null;
-
-  const projectLabel = projectName || "this project";
-  const descriptionText = description ? `It is ${description}.` : "";
-
-  if (isIntroductionQuestion) {
-    const intro = projectName
-      ? `I’m an automation agent for ${projectLabel}. ${descriptionText}`.trim()
-      : "I’m an automation agent for this project.";
-    return intro.replace(/\s+/g, " ").trim();
-  }
-
-  if (projectName || description) {
-    return description
-      ? `Your project is ${projectLabel}. ${descriptionText}`.trim()
-      : `Your project is ${projectLabel}.`;
-  }
-
-  return "I don’t have project details available yet.";
-}
-
 function resolveActionTargetLabel(actionPlan, elements = []) {
   const targetSelector = actionPlan?.target || actionPlan?.selector || null;
   const targetEntry = Array.isArray(elements)
@@ -628,14 +442,20 @@ async function generateTtsContext(
   options = {},
 ) {
   const fallback = buildFallbackTtsContext(transcript, actionPlan, elements);
-  const llmConfig = resolveLlmSettings(options);
-  if (!llmConfig.apiKey || !llmConfig.baseUrl) {
-    console.warn(
-      "[llm] no LLM API key or base URL configured — generateTtsContext using rule-based fallback instead of LLM",
-    );
-    return fallback;
-  }
-  const { apiKey, baseUrl, model } = llmConfig;
+  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
+    GROQ_API_KEY: options.apiKey || options.groqApiKey,
+  });
+  if (!apiKey) return fallback;
+
+  const baseUrl =
+    options.baseUrl ||
+    process.env.OPENAI_BASE_URL ||
+    "https://api.groq.com/openai/v1";
+  const model =
+    options.model ||
+    process.env.GROQ_CHAT_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "llama-3.3-70b-versatile";
 
   try {
     const isSummaryAction =
@@ -668,12 +488,6 @@ async function generateTtsContext(
               action: actionPlan?.action || "CLICK",
               target: actionPlan?.target || null,
               targetText: actionPlan?.reasoning || null,
-              projectContext: buildProjectContext(
-                options.projectConfig ||
-                  options.projectContext ||
-                  options.context ||
-                  {},
-              ),
               conversationContext: buildConversationContextPrompt(
                 options.conversationContext || "",
               ),
@@ -805,7 +619,7 @@ function scoreElementRelevance(
   return { score, reason };
 }
 
-export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
+export function buildRuleBasedActionPlan(transcript, elements) {
   const normalizedTranscript = normalizeText(transcript);
   if (!normalizedTranscript) {
     return {
@@ -818,23 +632,6 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
 
   const commandKeywords = getCommandKeywords(normalizedTranscript);
   const semanticSignals = getSemanticSignals(normalizedTranscript);
-
-  const projectContextResponse = buildProjectContextResponse(
-    normalizedTranscript,
-    options?.projectConfig || options?.projectContext || options?.context || {},
-  );
-
-  if (projectContextResponse) {
-    return {
-      action: "RESPOND",
-      target: null,
-      value: null,
-      message: projectContextResponse,
-      scrollRequired: false,
-      confidence: 0.96,
-      reasoning: "Used project context for an informational response.",
-    };
-  }
 
   if (/go back|previous page|back page|back/i.test(normalizedTranscript)) {
     return {
@@ -867,64 +664,14 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
   }
 
   if (/navigate to|go to|open the|visit/i.test(normalizedTranscript)) {
-    const explicitNavigationTarget = extractNavigationTarget(transcript);
-    const isExplicitDestination = Boolean(
-      (explicitNavigationTarget &&
-        /https?:\/\//i.test(explicitNavigationTarget)) ||
-      explicitNavigationTarget?.startsWith("/"),
-    );
-
-    if (isExplicitDestination) {
-      return {
-        action: "NAVIGATE",
-        target: null,
-        value: explicitNavigationTarget,
-        scrollRequired: false,
-        confidence: 0.9,
-        reasoning: "Matched explicit navigation intent.",
-      };
-    }
-
-    const pageSectionTarget = (elements || []).find((entry) => {
-      const label = normalizeText(
-        [
-          entry?.text,
-          entry?.ariaLabel,
-          entry?.placeholder,
-          entry?.id,
-          entry?.title,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
-      if (!label) return false;
-
-      return /products|pricing|about|contact|shop|home|blog|docs|login|signup|register|support|help/i.test(
-        label,
-      );
-    });
-
-    if (pageSectionTarget) {
-      return {
-        action: "CLICK",
-        target: pageSectionTarget.selector || null,
-        scrollRequired: Boolean(pageSectionTarget.scrollRequired),
-        confidence: 0.92,
-        reasoning:
-          "Matched visible navigation element for the requested page section.",
-      };
-    }
-
-    if (explicitNavigationTarget) {
-      return {
-        action: "NAVIGATE",
-        target: null,
-        value: explicitNavigationTarget,
-        scrollRequired: false,
-        confidence: 0.9,
-        reasoning: "Matched inferred navigation target.",
-      };
-    }
+    return {
+      action: "NAVIGATE",
+      target: null,
+      value: extractNavigationTarget(transcript),
+      scrollRequired: false,
+      confidence: 0.9,
+      reasoning: "Matched navigation intent.",
+    };
   }
 
   if (/press|hit|key/i.test(normalizedTranscript)) {
@@ -1274,14 +1021,6 @@ export function normalizeActionPlan(actionPlan) {
         ? Number(actionPlan.confidence)
         : undefined;
 
-  const plan = Array.isArray(actionPlan.plan)
-    ? actionPlan.plan.filter(Boolean)
-    : Array.isArray(actionPlan.actions)
-      ? actionPlan.actions.filter(Boolean)
-      : Array.isArray(actionPlan.steps)
-        ? actionPlan.steps.filter(Boolean)
-        : [];
-
   return {
     action,
     target: actionPlan.target || actionPlan.selector || null,
@@ -1298,7 +1037,6 @@ export function normalizeActionPlan(actionPlan) {
       actionPlan.reasoning || actionPlan.reason || "planning completed",
     ttsContext: actionPlan.ttsContext || null,
     clarifyOptions: actionPlan.options || actionPlan.choices || null,
-    plan,
   };
 }
 
@@ -1326,32 +1064,23 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     .map(({ relevanceScore, ...el }) => el)
     .slice(0, 20);
 
-  const fallback = buildRuleBasedActionPlan(transcript, elements, options);
+  const fallback = buildRuleBasedActionPlan(transcript, elements);
+  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
+    GROQ_API_KEY: options.apiKey,
+  });
+  if (!apiKey) return fallback;
 
-  const projectContextResponse = buildProjectContextResponse(
-    transcript,
-    options?.projectConfig || options?.projectContext || options?.context || {},
-  );
-  if (projectContextResponse) {
-    return {
-      ...fallback,
-      action: "RESPOND",
-      message: projectContextResponse,
-      ttsContext: projectContextResponse,
-      confidence: 0.96,
-      reasoning: "Used project context for an informational response.",
-    };
-  }
-
-  const llmConfig = resolveLlmSettings(options);
-  if (!llmConfig.apiKey || !llmConfig.baseUrl) {
-    console.warn(
-      "[llm] no LLM API key or base URL configured — buildActionPlan using rule-based fallback instead of the real LLM. Automation is running on keyword matching only.",
-    );
-    return fallback;
-  }
-
-  const { apiKey, baseUrl, model } = llmConfig;
+  const model =
+    options.model ||
+    process.env.OPENAI_MODEL ||
+    process.env.GROQ_CHAT_MODEL ||
+    "gpt-4o-mini";
+  const baseUrl =
+    options.baseUrl ||
+    process.env.OPENAI_BASE_URL ||
+    (process.env.OPENAI_API_KEY
+      ? "https://api.openai.com/v1"
+      : "https://api.groq.com/openai/v1");
 
   const projectContext = buildProjectContext(
     options.projectConfig || options.projectContext || options.context || {},
@@ -1359,8 +1088,14 @@ export async function buildActionPlan(transcript, elements, options = {}) {
   const conversationContext = String(options.conversationContext || "").trim();
 
   try {
-    const { data } = await callLlmWithFallback(
-      {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
         temperature: 0.1,
         response_format: { type: "json_object" },
         messages: [
@@ -1376,42 +1111,15 @@ export async function buildActionPlan(transcript, elements, options = {}) {
             }),
           },
         ],
-      },
-      llmConfig,
-    );
+      }),
+    });
 
+    if (!response.ok) throw new Error(`LLM request failed: ${response.status}`);
+    const data = await response.json();
     const content = data?.choices?.[0]?.message?.content || "{}";
     const parsedActionPlan =
       typeof content === "string" ? JSON.parse(content) : content;
     const normalizedActionPlan = normalizeActionPlan(parsedActionPlan);
-    const explicitNavigationTarget = extractNavigationTarget(transcript);
-    const pageSectionTarget = findVisibleNavigationTarget(
-      transcript,
-      optimizedElements,
-    );
-
-    if (pageSectionTarget) {
-      const shouldPatchClickTarget =
-        !normalizedActionPlan.target && normalizedActionPlan.action === "CLICK";
-
-      const shouldPatchNavigateTarget =
-        !explicitNavigationTarget && normalizedActionPlan.action === "NAVIGATE";
-
-      if (shouldPatchClickTarget || shouldPatchNavigateTarget) {
-        normalizedActionPlan.action = "CLICK";
-        normalizedActionPlan.target = pageSectionTarget.selector || null;
-        normalizedActionPlan.scrollRequired = Boolean(
-          pageSectionTarget.scrollRequired,
-        );
-        normalizedActionPlan.confidence = Math.max(
-          normalizedActionPlan.confidence,
-          0.92,
-        );
-        normalizedActionPlan.reasoning =
-          "Matched visible navigation element for the requested page section.";
-      }
-    }
-
     const ttsContext = await generateTtsContext(
       transcript,
       normalizedActionPlan,

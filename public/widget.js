@@ -210,12 +210,6 @@
 
       collectStructuredData() {
         const structured = { tables: [], grids: [] };
-        const truncate = (value, maxLength) =>
-          this.handler?.truncateText
-            ? this.handler.truncateText(value, maxLength)
-            : String(value || "")
-                .trim()
-                .slice(0, maxLength);
 
         try {
           // Tables
@@ -227,7 +221,7 @@
               const ths = thead.querySelectorAll("th");
               ths.forEach((th) =>
                 headers.push(
-                  truncate(th.innerText || th.textContent || "", 80),
+                  this.truncateText(th.innerText || th.textContent || "", 80),
                 ),
               );
             } else {
@@ -236,7 +230,7 @@
                 const ths = firstRow.querySelectorAll("th,td");
                 ths.forEach((th) =>
                   headers.push(
-                    truncate(th.innerText || th.textContent || "", 80),
+                    this.truncateText(th.innerText || th.textContent || "", 80),
                   ),
                 );
               }
@@ -308,7 +302,7 @@
             trs.forEach((tr, idx) => {
               const cells = Array.from(tr.querySelectorAll("td,th")).map(
                 (cell) => {
-                  const txt = truncate(
+                  const txt = this.truncateText(
                     cell.innerText || cell.textContent || "",
                     140,
                   );
@@ -350,7 +344,10 @@
               );
               const items = sampleChildren.map((child, i) => ({
                 index: i,
-                text: truncate(child.innerText || child.textContent || "", 220),
+                text: this.truncateText(
+                  child.innerText || child.textContent || "",
+                  220,
+                ),
                 selector: this.buildUniqueSelector(child),
               }));
               structured.grids.push({
@@ -638,7 +635,6 @@
     mediaMimeType: null,
     chunkFlushTimer: null,
     pendingAudioControlState: null,
-    pendingAudioControlProjectId: null,
     audioControlState: "idle",
     transcriptDispatchInFlight: new Set(),
     transcriptionMode: "browser",
@@ -651,8 +647,6 @@
     isExpanded: false,
     initChunk: null,
     initChunkLastSentAt: 0,
-    queuedActions: [],
-    executingQueuedActions: false,
   };
 
   const overlayId = "voice-widget-overlay";
@@ -665,18 +659,9 @@
 
   const currentScript =
     document.currentScript ||
-    Array.from(document.scripts).find((script) => {
-      if (!script.src) return false;
-      try {
-        const url = new URL(script.src, window.location.href);
-        return (
-          url.pathname.endsWith("/widget.js") ||
-          url.pathname.endsWith("widget.js")
-        );
-      } catch {
-        return /widget\.js(?:\?.*)?$/.test(script.src);
-      }
-    });
+    Array.from(document.scripts).find((script) =>
+      /widget\.js(?:\?.*)?$/.test(script.src),
+    );
   const defaultApiUrl = "https://voice-wave-ai-production.up.railway.app";
   const defaultWsUrl = "wss://voice-wave-ai-production.up.railway.app";
   const configuredApiUrl =
@@ -992,22 +977,6 @@
       .split(/\s+/)
       .filter(Boolean).length;
     return Math.max(900, wordCount * 250 + 600);
-  }
-
-  function getFastPathActionPlan(transcript, elements = []) {
-    const plan = domParser?.buildExecutionPlan?.(transcript, elements);
-    if (!plan || !plan.action || plan.action === "NONE") return null;
-
-    const action = String(plan.action || "").toUpperCase();
-    const reason = String(plan.reason || "").toLowerCase();
-    const confidence = plan.confidence;
-    const isDirectTextClick =
-      action === "CLICK" &&
-      (confidence === "high" ||
-        reason.includes("matched by text") ||
-        reason.includes("matched direct"));
-
-    return isDirectTextClick ? plan : null;
   }
 
   async function speakReply(text) {
@@ -1346,77 +1315,6 @@
     await new Promise((resolve) => window.setTimeout(resolve, 400));
   }
 
-  function normalizeQueuedActions(actionPlan) {
-    if (!actionPlan) return [];
-
-    if (Array.isArray(actionPlan)) return actionPlan.filter(Boolean);
-
-    const plan = actionPlan.plan || actionPlan.actions || actionPlan.steps;
-    if (Array.isArray(plan)) return plan.filter(Boolean);
-
-    if (actionPlan.action && actionPlan.action !== "NONE") return [actionPlan];
-
-    return [];
-  }
-
-  async function runQueuedActionPlan(actionPlan) {
-    const queuedActions = normalizeQueuedActions(actionPlan);
-    if (queuedActions.length === 0) return;
-
-    scriptState.queuedActions = queuedActions;
-    if (scriptState.executingQueuedActions) return;
-
-    scriptState.executingQueuedActions = true;
-
-    try {
-      while (scriptState.queuedActions.length > 0) {
-        const nextAction = scriptState.queuedActions.shift();
-        if (!nextAction || !nextAction.action || nextAction.action === "NONE") {
-          continue;
-        }
-
-        if (nextAction.action === "RESPOND") {
-          const message = nextAction.message || nextAction.ttsContext || "";
-          if (message) {
-            setFeedback(message, nextAction);
-            await speakReply(message);
-            await new Promise((resolve) => window.setTimeout(resolve, 400));
-          }
-          continue;
-        }
-
-        if (nextAction.action === "CLARIFY") {
-          scriptState.pendingClarify = nextAction;
-          const question =
-            nextAction.message ||
-            nextAction.ttsContext ||
-            "Which option do you mean?";
-          setFeedback(question, nextAction);
-          await speakReply(question);
-          await new Promise((resolve) => window.setTimeout(resolve, 400));
-          scriptState.processing = false;
-          setProcessingState(false);
-          setStatus("Listening for clarification...");
-          setFeedback("Listening for clarification...");
-          if (scriptState.sessionActive && !scriptState.userInitiatedStop) {
-            resumeAudioCapture();
-          }
-          break;
-        }
-
-        await announceAction(nextAction);
-        executeActionPlan(nextAction);
-        await new Promise((resolve) => window.setTimeout(resolve, 450));
-      }
-    } finally {
-      scriptState.executingQueuedActions = false;
-      scriptState.queuedActions = [];
-      if (scriptState.processing && !scriptState.pendingClarify) {
-        endProcessingCycle();
-      }
-    }
-  }
-
   function getClarificationChoice(transcript, options = []) {
     if (!Array.isArray(options) || options.length === 0) return null;
 
@@ -1525,7 +1423,8 @@
         return;
       }
 
-      await runQueuedActionPlan(actionPlan);
+      await announceAction(actionPlan);
+      executeActionPlan(actionPlan);
     } finally {
       if (scriptState.processing && !scriptState.pendingClarify) {
         endProcessingCycle();
@@ -2008,11 +1907,7 @@
 
   function pauseAudioCapture() {
     scriptState.audioControlState = "pause";
-    sendSocketPayload({
-      type: "audio-control",
-      state: "pause",
-      projectId: getProjectId(),
-    });
+    sendSocketPayload({ type: "audio-control", state: "pause" });
     clearSilenceTimer();
 
     if (scriptState.transcriptionMode === "browser") {
@@ -2043,35 +1938,15 @@
     if (!scriptState.sessionActive || scriptState.userInitiatedStop) return;
     if (!scriptState.stream) return;
     scriptState.audioControlState = "resume";
-    sendSocketPayload({
-      type: "audio-control",
-      state: "resume",
-      projectId: getProjectId(),
-    });
+    sendSocketPayload({ type: "audio-control", state: "resume" });
 
     if (scriptState.transcriptionMode === "browser") {
-      // Starting a new SpeechRecognition instance immediately after
-      // abort()/stop() on the previous one races the browser's speech
-      // service teardown and reliably produces a spurious "aborted" error
-      // followed by "no-speech" on the new instance. A short delay here
-      // lets that teardown finish before we start listening again.
-      scriptState.resumeToken = (scriptState.resumeToken || 0) + 1;
-      const resumeToken = scriptState.resumeToken;
-      window.setTimeout(() => {
-        if (
-          scriptState.resumeToken !== resumeToken ||
-          !scriptState.sessionActive ||
-          scriptState.userInitiatedStop
-        ) {
-          return; // superseded by another resume/stop while waiting
-        }
-        const restarted = startRecognition();
-        if (restarted) {
-          scriptState.listening = true;
-          setListeningState(true);
-          setStatus("Listening");
-        }
-      }, 250);
+      const restarted = startRecognition();
+      if (restarted) {
+        scriptState.listening = true;
+        setListeningState(true);
+        setStatus("Listening");
+      }
       return;
     }
 
@@ -2089,10 +1964,7 @@
     scriptState.processing = true;
     setProcessingState(true);
     setStatus("Processing command...");
-    const transcript = String(scriptState.latestTranscript || "").trim();
-    setFeedback(
-      transcript ? `Processing: ${transcript}` : "Processing command...",
-    );
+    setFeedback("Processing command...");
     pauseAudioCapture();
   }
 
@@ -2105,8 +1977,6 @@
       return;
     }
     if (scriptState.sessionActive && !scriptState.listening) {
-      setStatus("Resuming...");
-      setFeedback("Resuming listening...");
       resumeAudioCapture();
       return;
     }
@@ -2135,7 +2005,6 @@
     const trimmedText = String(text).trim();
     if (!trimmedText) return;
     const transcriptKey = normalizeTranscriptKey(trimmedText);
-    scriptState.lastLatencyStartAt = performance.now();
     if (scriptState.lastProcessedTranscriptKey === transcriptKey) return;
 
     scriptState.latestTranscript = trimmedText;
@@ -2143,7 +2012,6 @@
     scriptState.lastProcessedTranscriptKey = transcriptKey;
     setStatus(`Heard: ${trimmedText}`);
     setFeedback(`Processing: ${trimmedText}`);
-    beginProcessingCycle();
 
     const rawElements = domParser.collectContext();
     const elements = domHandler.prepareContext(rawElements);
@@ -2188,7 +2056,7 @@
                 transcript: followup,
                 elements,
                 structured,
-                projectId: getProjectId(),
+                projectId: currentScript?.getAttribute("data-project-id") || "",
               }),
             );
           } else {
@@ -2202,31 +2070,20 @@
         scriptState.pendingClarify = null;
       }
     }
-    const fastPathPlan = getFastPathActionPlan(trimmedText, elements);
-    if (fastPathPlan) {
-      console.debug(
-        "[voice-widget] using fast-path direct match",
-        fastPathPlan,
-      );
-      beginProcessingCycle();
-      showActionPlan(fastPathPlan);
-      return;
-    }
-
     beginProcessingCycle();
     if (
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
     ) {
-      const payload = {
-        type: "intent",
-        transcript: trimmedText,
-        elements,
-        structured,
-        projectId: getProjectId(),
-      };
-      console.debug("[voice-widget] sending intent payload", payload);
-      scriptState.socket.send(JSON.stringify(payload));
+      scriptState.socket.send(
+        JSON.stringify({
+          type: "intent",
+          transcript: trimmedText,
+          elements,
+          structured,
+          projectId: currentScript?.getAttribute("data-project-id") || "",
+        }),
+      );
     } else {
       postIntentToBackend(trimmedText, elements, structured);
     }
@@ -2234,7 +2091,6 @@
 
   async function postIntentToBackend(transcript, elements) {
     const endpoint = `${getApiBaseUrl()}/api/process-intent`;
-    const startedAt = scriptState.lastLatencyStartAt || performance.now();
     try {
       const response = await fetch(endpoint, {
         method: "POST",
@@ -2245,17 +2101,12 @@
           structured: domParser.collectStructuredData
             ? domParser.collectStructuredData()
             : { tables: [], grids: [] },
-          projectId: getProjectId(),
+          projectId: currentScript?.getAttribute("data-project-id") || "",
         }),
       });
       const data = await response.json().catch(() => ({}));
       const actionPlan =
         data?.action || domParser.buildExecutionPlan(transcript, elements);
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      console.info(
-        `[voice-widget] end-to-end latency ${elapsedMs}ms for "${transcript}"`,
-        actionPlan,
-      );
       console.log(
         "[voice-widget] intent execution pipeline data payload:",
         data,
@@ -2267,40 +2118,16 @@
     }
   }
 
-  function getProjectId() {
-    const projectId =
-      window.__VOICE_WIDGET_PROJECT_ID__ ||
-      currentScript?.getAttribute("data-project-id") ||
-      currentScript?.dataset?.projectId ||
-      "";
-    if (!projectId) {
-      console.warn("[voice-widget] no data-project-id found on widget script");
-    }
-    return projectId;
-  }
-
   function sendSocketPayload(payload) {
     if (
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
     ) {
-      try {
-        scriptState.socket.send(JSON.stringify(payload));
-      } catch (error) {
-        console.warn("[voice-widget] failed to send socket payload", error);
-        return false;
-      }
+      scriptState.socket.send(JSON.stringify(payload));
       return true;
     }
-    if (payload.type === "audio-control") {
-      scriptState.pendingAudioControlState = payload.state;
-      scriptState.pendingAudioControlProjectId = payload.projectId || null;
-    } else {
-      console.warn(
-        "[voice-widget] socket unavailable for payload, falling back if possible",
-        payload,
-      );
-    }
+    scriptState.pendingAudioControlState =
+      payload.type === "audio-control" ? payload.state : null;
     return false;
   }
 
@@ -2309,10 +2136,8 @@
     sendSocketPayload({
       type: "audio-control",
       state: scriptState.pendingAudioControlState,
-      projectId: scriptState.pendingAudioControlProjectId || getProjectId(),
     });
     scriptState.pendingAudioControlState = null;
-    scriptState.pendingAudioControlProjectId = null;
   }
 
   function openSocket() {
@@ -2457,18 +2282,6 @@
       recognition.lang = "en-US";
 
       recognition.onresult = (event) => {
-        // Guard against a stale/zombie recognition instance still delivering
-        // queued results after it was aborted/replaced by startRecognition().
-        if (
-          scriptState.recognition !== recognition ||
-          scriptState.recognitionSessionId !== recognitionSessionId
-        ) {
-          console.debug(
-            "[voice-widget] onresult ignored: stale recognition instance",
-          );
-          return;
-        }
-
         let interimText = "";
         let finalText = "";
         for (
@@ -2502,33 +2315,18 @@
           scriptState.latestTranscript = text;
           setStatus(`Transcript: ${text}`);
           setFeedback(`Transcript: ${text}`);
-          const socketPayload = {
-            type: "transcript",
-            text,
-            isFinal: true,
-            elements: domHandler.prepareContext(domParser.collectContext()),
-            structured: domParser.collectStructuredData
-              ? domParser.collectStructuredData()
-              : { tables: [], grids: [] },
-            projectId: getProjectId(),
-          };
-
           if (
             scriptState.socket &&
             scriptState.socket.readyState === WebSocket.OPEN
           ) {
-            console.debug(
-              "[voice-widget] sending transcript payload",
-              socketPayload,
+            scriptState.socket.send(
+              JSON.stringify({ type: "transcript", text, isFinal: true }),
             );
-            scriptState.socket.send(JSON.stringify(socketPayload));
-            beginProcessingCycle();
-          } else {
-            window.clearTimeout(scriptState.pendingTranscriptTimer);
-            scriptState.pendingTranscriptTimer = window.setTimeout(() => {
-              submitPendingTranscript(text);
-            }, 650);
           }
+          window.clearTimeout(scriptState.pendingTranscriptTimer);
+          scriptState.pendingTranscriptTimer = window.setTimeout(() => {
+            submitPendingTranscript(text);
+          }, 650);
         }
         if (interimText) {
           setStatus(`Listening: ${interimText}`);
@@ -2537,59 +2335,13 @@
 
       recognition.onerror = (event) => {
         console.warn("[voice-widget] recognition error", event.error);
-
-        // Ignore events from an instance that's already been superseded
-        // (e.g. the old instance aborted by pauseAudioCapture/stopRecognition).
-        if (
-          scriptState.recognition !== recognition ||
-          scriptState.recognitionSessionId !== recognitionSessionId
-        ) {
-          return;
-        }
-
         setStatus(`Recognition error: ${event.error}`);
-
-        console.warn("[voice-widget] onerror state snapshot", {
-          error: event.error,
-          processing: scriptState.processing,
-          listening: scriptState.listening,
-          sessionActive: scriptState.sessionActive,
-          userInitiatedStop: scriptState.userInitiatedStop,
-        });
-
-        // "no-speech" is Chrome's own silence timeout, and "aborted" can be
-        // this exact instance being intentionally stopped moments before a
-        // deliberate restart. Neither means the session actually failed —
-        // if we're still supposed to be listening, just restart quietly
-        // instead of ending the session and asking the user to click the
-        // mic again.
-        const RECOVERABLE_ERRORS = new Set(["no-speech", "aborted"]);
         if (
-          RECOVERABLE_ERRORS.has(event.error) &&
-          scriptState.sessionActive &&
-          !scriptState.userInitiatedStop &&
-          !scriptState.processing
+          scriptState.listening &&
+          scriptState.transcriptionMode === "browser" &&
+          scriptState.recognition === recognition &&
+          scriptState.recognitionSessionId === recognitionSessionId
         ) {
-          window.setTimeout(() => {
-            if (
-              !scriptState.sessionActive ||
-              scriptState.userInitiatedStop ||
-              scriptState.processing
-            ) {
-              return; // state changed while we were waiting to restart
-            }
-            const restarted = startRecognition();
-            if (restarted) {
-              scriptState.listening = true;
-              setListeningState(true);
-              setStatus("Listening");
-              setFeedback("Listening ...");
-            }
-          }, 250);
-          return;
-        }
-
-        if (scriptState.listening) {
           scriptState.listening = false;
           setListeningState(false);
           void speakReply(
@@ -2831,15 +2583,10 @@
 
     scriptState.sessionActive = true;
     scriptState.audioControlState = "start";
+    sendSocketPayload({ type: "audio-control", state: "start" });
     scriptState.userInitiatedStop = false;
     scriptState.processing = false;
-    scriptState.listening = false;
     openSocket();
-    sendSocketPayload({
-      type: "audio-control",
-      state: "start",
-      projectId: getProjectId(),
-    });
     setListeningState(false);
     setStatus("Requesting microphone access...");
     setFeedback("Requesting microphone access...");
@@ -2879,6 +2626,7 @@
     scriptState.sessionActive = false;
     scriptState.userInitiatedStop = true;
     scriptState.audioControlState = "stop";
+    sendSocketPayload({ type: "audio-control", state: "stop" });
     scriptState.processing = false;
     setProcessingState(false);
     clearSilenceTimer();
@@ -2891,13 +2639,8 @@
       scriptState.mediaRecorder &&
       scriptState.mediaRecorder.state !== "inactive"
     ) {
-      try {
-        scriptState.mediaRecorder.stop();
-      } catch (error) {
-        console.warn("[voice-widget] error stopping media recorder", error);
-      }
+      scriptState.mediaRecorder.stop();
     }
-    scriptState.mediaRecorder = null;
     if (scriptState.stream) {
       scriptState.stream.getTracks().forEach((track) => track.stop());
       scriptState.stream = null;
@@ -2905,21 +2648,11 @@
     stopRecognition();
     setListeningState(false);
 
-    sendSocketPayload({
-      type: "audio-control",
-      state: "stop",
-      projectId: getProjectId(),
-    });
-
     if (
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
     ) {
-      try {
-        scriptState.socket.close();
-      } catch (error) {
-        console.warn("[voice-widget] could not close socket cleanly", error);
-      }
+      scriptState.socket.close();
     }
     scriptState.socket = null;
 

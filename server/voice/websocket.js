@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 import { WebSocketServer } from "ws";
 import { buildActionPlan } from "./planner.js";
-import { applyMetricsEvent, getSessionLifecycle } from "./metrics.js";
 import Project from "../models/Project.js";
 import InteractionLog from "../models/InteractionLog.js";
 import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
@@ -52,32 +51,6 @@ function buildConversationSummary(conversationContext = []) {
     .join("\n");
 }
 
-async function updateProjectMetrics(projectId, event) {
-  if (!projectId) return;
-
-  try {
-    const project = await Project.findById(projectId);
-    if (!project) return;
-
-    const nextMetrics = applyMetricsEvent(project.usageMetrics || {}, event);
-    project.usageMetrics = {
-      ...project.usageMetrics,
-      ...nextMetrics,
-    };
-
-    if (event?.type === "llm_call" && project.isConnected !== true) {
-      project.isConnected = true;
-    }
-
-    await project.save();
-  } catch (error) {
-    console.warn(
-      `[ws] failed to update project metrics for ${projectId}`,
-      error.message,
-    );
-  }
-}
-
 function getSession(sessions, clientId, socket) {
   if (!sessions.has(clientId)) {
     sessions.set(clientId, {
@@ -97,7 +70,6 @@ function getSession(sessions, clientId, socket) {
       desiredStreaming: false,
       keepAliveTimer: null,
       pendingAudioChunks: [],
-      metricsInitialized: false,
     });
   }
   return sessions.get(clientId);
@@ -235,52 +207,15 @@ export function setupVoiceWebSocket(server, config = {}) {
       }
 
       try {
-        let payload = JSON.parse(data.toString());
+        const payload = JSON.parse(data.toString());
         if (payload.type === "media-type" && payload.mimeType) {
           session.mimeType = String(payload.mimeType).trim();
           console.debug("[ws] received media type", session.mimeType);
           return;
         }
 
-        if (payload.type === "transcript") {
-          const transcript = String(payload.text || "").trim();
-          if (!transcript || payload.isFinal === false) {
-            return;
-          }
-          const projectId = payload.projectId || session.projectId || "";
-          session.projectId = session.projectId || projectId;
-          payload = {
-            type: "intent",
-            transcript,
-            elements: payload.elements || [],
-            structured: payload.structured || [],
-            projectId,
-          };
-          console.debug("[ws] converted transcript payload to intent", {
-            transcript,
-            projectId,
-          });
-        }
-
         if (payload.type === "audio-control") {
           const state = String(payload.state || "").toLowerCase();
-          const lifecycle = getSessionLifecycle(state, session);
-
-          if (payload.projectId) {
-            session.projectId = payload.projectId;
-          }
-
-          if (lifecycle.shouldStart) {
-            session.metricsSessionActive = true;
-            await updateProjectMetrics(session.projectId || payload.projectId, {
-              type: "session_start",
-            });
-          }
-
-          if (lifecycle.shouldEnd) {
-            session.metricsSessionActive = false;
-          }
-
           if (state === "pause" || state === "stop") {
             session.desiredStreaming = false;
             closeDeepgramConnection(session);
@@ -302,9 +237,6 @@ export function setupVoiceWebSocket(server, config = {}) {
             "[ws] flush-audio received; Deepgram endpointing handles utterance completion",
           );
         } else if (payload.type === "intent") {
-          if (!payload.projectId && session.projectId) {
-            payload.projectId = session.projectId;
-          }
           let projectConfig = null;
           if (payload.projectId) {
             try {
@@ -330,10 +262,6 @@ export function setupVoiceWebSocket(server, config = {}) {
             }
           }
 
-          console.debug("[ws] starting intent processing", {
-            transcript: payload.transcript,
-            projectId: payload.projectId,
-          });
           const action = await buildActionPlan(
             payload.transcript,
             payload.elements || [],
@@ -346,27 +274,12 @@ export function setupVoiceWebSocket(server, config = {}) {
               sessionId: clientId,
             },
           );
-          console.debug("[ws] intent processed", {
-            action: action?.action,
-            target: action?.target,
-            confidence: action?.confidence,
-            projectId: payload.projectId,
-          });
 
           session.conversationContext.push({
             transcript: payload.transcript,
             action: action?.action || "NONE",
             ttsContext: action?.ttsContext || "",
           });
-
-          if (payload.projectId) {
-            await updateProjectMetrics(payload.projectId, { type: "llm_call" });
-            await updateProjectMetrics(payload.projectId, {
-              type: "action_result",
-              confidence: Number(action?.confidence || 0),
-              success: Boolean(action?.action && action.action !== "NONE"),
-            });
-          }
 
           if (payload.projectId) {
             try {
@@ -395,18 +308,7 @@ export function setupVoiceWebSocket(server, config = {}) {
             }
           }
 
-          try {
-            socket.send(JSON.stringify({ type: "action", action }));
-            console.debug("[ws] sent action payload", {
-              action: action?.action,
-              projectId: payload.projectId,
-            });
-          } catch (sendError) {
-            console.error(
-              "[ws] failed to send action payload",
-              sendError.message,
-            );
-          }
+          socket.send(JSON.stringify({ type: "action", action }));
         }
       } catch (error) {
         console.error(`[ws error] ${clientId}:`, error.message);
