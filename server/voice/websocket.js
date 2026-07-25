@@ -235,7 +235,7 @@ export function setupVoiceWebSocket(server, config = {}) {
       }
 
       try {
-        const payload = JSON.parse(data.toString());
+        let payload = JSON.parse(data.toString());
         if (payload.type === "media-type" && payload.mimeType) {
           session.mimeType = String(payload.mimeType).trim();
           console.debug("[ws] received media type", session.mimeType);
