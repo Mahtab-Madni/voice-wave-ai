@@ -247,16 +247,18 @@ export function setupVoiceWebSocket(server, config = {}) {
           if (!transcript || payload.isFinal === false) {
             return;
           }
+          const projectId = payload.projectId || session.projectId || "";
+          session.projectId = session.projectId || projectId;
           payload = {
             type: "intent",
             transcript,
             elements: payload.elements || [],
             structured: payload.structured || [],
-            projectId: payload.projectId || "",
+            projectId,
           };
           console.debug("[ws] converted transcript payload to intent", {
             transcript,
-            projectId: payload.projectId,
+            projectId,
           });
         }
 
@@ -264,9 +266,13 @@ export function setupVoiceWebSocket(server, config = {}) {
           const state = String(payload.state || "").toLowerCase();
           const lifecycle = getSessionLifecycle(state, session);
 
+          if (payload.projectId) {
+            session.projectId = payload.projectId;
+          }
+
           if (lifecycle.shouldStart) {
             session.metricsSessionActive = true;
-            await updateProjectMetrics(payload.projectId, {
+            await updateProjectMetrics(session.projectId || payload.projectId, {
               type: "session_start",
             });
           }
@@ -296,6 +302,9 @@ export function setupVoiceWebSocket(server, config = {}) {
             "[ws] flush-audio received; Deepgram endpointing handles utterance completion",
           );
         } else if (payload.type === "intent") {
+          if (!payload.projectId && session.projectId) {
+            payload.projectId = session.projectId;
+          }
           let projectConfig = null;
           if (payload.projectId) {
             try {
@@ -321,10 +330,6 @@ export function setupVoiceWebSocket(server, config = {}) {
             }
           }
 
-          console.debug("[ws] starting intent processing", {
-            transcript: payload.transcript,
-            projectId: payload.projectId,
-          });
           console.debug("[ws] starting intent processing", {
             transcript: payload.transcript,
             projectId: payload.projectId,

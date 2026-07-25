@@ -2005,7 +2005,11 @@
 
   function pauseAudioCapture() {
     scriptState.audioControlState = "pause";
-    sendSocketPayload({ type: "audio-control", state: "pause" });
+    sendSocketPayload({
+      type: "audio-control",
+      state: "pause",
+      projectId: getProjectId(),
+    });
     clearSilenceTimer();
 
     if (scriptState.transcriptionMode === "browser") {
@@ -2036,7 +2040,11 @@
     if (!scriptState.sessionActive || scriptState.userInitiatedStop) return;
     if (!scriptState.stream) return;
     scriptState.audioControlState = "resume";
-    sendSocketPayload({ type: "audio-control", state: "resume" });
+    sendSocketPayload({
+      type: "audio-control",
+      state: "resume",
+      projectId: getProjectId(),
+    });
 
     if (scriptState.transcriptionMode === "browser") {
       const restarted = startRecognition();
@@ -2111,6 +2119,7 @@
     scriptState.lastProcessedTranscriptKey = transcriptKey;
     setStatus(`Heard: ${trimmedText}`);
     setFeedback(`Processing: ${trimmedText}`);
+    beginProcessingCycle();
 
     const rawElements = domParser.collectContext();
     const elements = domHandler.prepareContext(rawElements);
@@ -2155,7 +2164,7 @@
                 transcript: followup,
                 elements,
                 structured,
-                projectId: currentScript?.getAttribute("data-project-id") || "",
+                projectId: getProjectId(),
               }),
             );
           } else {
@@ -2212,7 +2221,7 @@
           structured: domParser.collectStructuredData
             ? domParser.collectStructuredData()
             : { tables: [], grids: [] },
-          projectId: currentScript?.getAttribute("data-project-id") || "",
+          projectId: getProjectId(),
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -2457,18 +2466,33 @@
           scriptState.latestTranscript = text;
           setStatus(`Transcript: ${text}`);
           setFeedback(`Transcript: ${text}`);
+          const socketPayload = {
+            type: "transcript",
+            text,
+            isFinal: true,
+            elements: domHandler.prepareContext(domParser.collectContext()),
+            structured: domParser.collectStructuredData
+              ? domParser.collectStructuredData()
+              : { tables: [], grids: [] },
+            projectId: getProjectId(),
+          };
+
           if (
             scriptState.socket &&
             scriptState.socket.readyState === WebSocket.OPEN
           ) {
-            scriptState.socket.send(
-              JSON.stringify({ type: "transcript", text, isFinal: true }),
+            console.debug(
+              "[voice-widget] sending transcript payload",
+              socketPayload,
             );
+            scriptState.socket.send(JSON.stringify(socketPayload));
+            beginProcessingCycle();
+          } else {
+            window.clearTimeout(scriptState.pendingTranscriptTimer);
+            scriptState.pendingTranscriptTimer = window.setTimeout(() => {
+              submitPendingTranscript(text);
+            }, 650);
           }
-          window.clearTimeout(scriptState.pendingTranscriptTimer);
-          scriptState.pendingTranscriptTimer = window.setTimeout(() => {
-            submitPendingTranscript(text);
-          }, 650);
         }
         if (interimText) {
           setStatus(`Listening: ${interimText}`);
@@ -2799,7 +2823,11 @@
     stopRecognition();
     setListeningState(false);
 
-    sendSocketPayload({ type: "audio-control", state: "stop" });
+    sendSocketPayload({
+      type: "audio-control",
+      state: "stop",
+      projectId: getProjectId(),
+    });
 
     if (
       scriptState.socket &&
