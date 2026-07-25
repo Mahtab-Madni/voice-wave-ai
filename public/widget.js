@@ -210,6 +210,12 @@
 
       collectStructuredData() {
         const structured = { tables: [], grids: [] };
+        const truncate = (value, maxLength) =>
+          this.handler?.truncateText
+            ? this.handler.truncateText(value, maxLength)
+            : String(value || "")
+                .trim()
+                .slice(0, maxLength);
 
         try {
           // Tables
@@ -221,12 +227,7 @@
               const ths = thead.querySelectorAll("th");
               ths.forEach((th) =>
                 headers.push(
-                  this.handler?.truncateText
-                    ? this.handler.truncateText(
-                        th.innerText || th.textContent || "",
-                        80,
-                      )
-                    : String(th.innerText || th.textContent || "").slice(0, 80),
+                  truncate(th.innerText || th.textContent || "", 80),
                 ),
               );
             } else {
@@ -235,15 +236,7 @@
                 const ths = firstRow.querySelectorAll("th,td");
                 ths.forEach((th) =>
                   headers.push(
-                    this.handler?.truncateText
-                      ? this.handler.truncateText(
-                          th.innerText || th.textContent || "",
-                          80,
-                        )
-                      : String(th.innerText || th.textContent || "").slice(
-                          0,
-                          80,
-                        ),
+                    truncate(th.innerText || th.textContent || "", 80),
                   ),
                 );
               }
@@ -315,15 +308,10 @@
             trs.forEach((tr, idx) => {
               const cells = Array.from(tr.querySelectorAll("td,th")).map(
                 (cell) => {
-                  const txt = this.handler?.truncateText
-                    ? this.handler.truncateText(
-                        cell.innerText || cell.textContent || "",
-                        140,
-                      )
-                    : String(cell.innerText || cell.textContent || "").slice(
-                        0,
-                        140,
-                      );
+                  const txt = truncate(
+                    cell.innerText || cell.textContent || "",
+                    140,
+                  );
                   const parsed = parseNumericValue(txt);
                   return { text: txt, parsed };
                 },
@@ -362,15 +350,7 @@
               );
               const items = sampleChildren.map((child, i) => ({
                 index: i,
-                text: this.handler?.truncateText
-                  ? this.handler.truncateText(
-                      child.innerText || child.textContent || "",
-                      220,
-                    )
-                  : String(child.innerText || child.textContent || "").slice(
-                      0,
-                      220,
-                    ),
+                text: truncate(child.innerText || child.textContent || "", 220),
                 selector: this.buildUniqueSelector(child),
               }));
               structured.grids.push({
@@ -661,8 +641,6 @@
     pendingAudioControlProjectId: null,
     audioControlState: "idle",
     transcriptDispatchInFlight: new Set(),
-    recognitionShutdownAt: 0,
-    pendingSpeechRestartTimer: null,
     transcriptionMode: "browser",
     lastSpokenMessageKey: "",
     lastSpokenAt: 0,
@@ -2072,35 +2050,28 @@
     });
 
     if (scriptState.transcriptionMode === "browser") {
-      if (scriptState.pendingSpeechRestartTimer) {
-        window.clearTimeout(scriptState.pendingSpeechRestartTimer);
-        scriptState.pendingSpeechRestartTimer = null;
-      }
-
-      const now = Date.now();
-      const elapsedSinceShutdown =
-        now - (scriptState.recognitionShutdownAt || 0);
-      const restartDelay =
-        elapsedSinceShutdown < 250 ? 250 - elapsedSinceShutdown : 0;
-
-      const attemptStart = () => {
-        scriptState.pendingSpeechRestartTimer = null;
+      // Starting a new SpeechRecognition instance immediately after
+      // abort()/stop() on the previous one races the browser's speech
+      // service teardown and reliably produces a spurious "aborted" error
+      // followed by "no-speech" on the new instance. A short delay here
+      // lets that teardown finish before we start listening again.
+      scriptState.resumeToken = (scriptState.resumeToken || 0) + 1;
+      const resumeToken = scriptState.resumeToken;
+      window.setTimeout(() => {
+        if (
+          scriptState.resumeToken !== resumeToken ||
+          !scriptState.sessionActive ||
+          scriptState.userInitiatedStop
+        ) {
+          return; // superseded by another resume/stop while waiting
+        }
         const restarted = startRecognition();
         if (restarted) {
           scriptState.listening = true;
           setListeningState(true);
           setStatus("Listening");
         }
-      };
-
-      if (restartDelay > 0) {
-        scriptState.pendingSpeechRestartTimer = window.setTimeout(
-          attemptStart,
-          restartDelay,
-        );
-      } else {
-        attemptStart();
-      }
+      }, 250);
       return;
     }
 
@@ -2484,6 +2455,8 @@
       recognition.lang = "en-US";
 
       recognition.onresult = (event) => {
+        // Guard against a stale/zombie recognition instance still delivering
+        // queued results after it was aborted/replaced by startRecognition().
         if (
           scriptState.recognition !== recognition ||
           scriptState.recognitionSessionId !== recognitionSessionId
@@ -2493,6 +2466,7 @@
           );
           return;
         }
+
         let interimText = "";
         let finalText = "";
         for (
@@ -2562,16 +2536,6 @@
       recognition.onerror = (event) => {
         console.warn("[voice-widget] recognition error", event.error);
         setStatus(`Recognition error: ${event.error}`);
-        if (
-          event.error === "aborted" &&
-          scriptState.sessionActive &&
-          !scriptState.userInitiatedStop
-        ) {
-          console.debug(
-            "[voice-widget] recognition aborted during restart; ignoring fallback",
-          );
-          return;
-        }
         if (
           scriptState.listening &&
           scriptState.transcriptionMode === "browser" &&
@@ -2791,10 +2755,6 @@
       window.clearTimeout(scriptState.pendingTranscriptTimer);
       scriptState.pendingTranscriptTimer = null;
     }
-    if (scriptState.pendingSpeechRestartTimer) {
-      window.clearTimeout(scriptState.pendingSpeechRestartTimer);
-      scriptState.pendingSpeechRestartTimer = null;
-    }
     clearSilenceTimer();
     stopAudioMonitoring();
     if (scriptState.recognition) {
@@ -2809,7 +2769,6 @@
         console.warn("[voice-widget] failed to stop recognition", error);
       }
       scriptState.recognition = null;
-      scriptState.recognitionShutdownAt = Date.now();
     }
     scriptState.latestTranscript = "";
     scriptState.lastProcessedTranscript = "";
