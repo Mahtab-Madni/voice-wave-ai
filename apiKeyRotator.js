@@ -30,6 +30,34 @@ function createKeyRotator(apiKeys) {
   };
 }
 
+function resolveRotatedApiKey(envVarName, options = {}, state = globalThis) {
+  const configuredKeys = normalizeApiKeys(
+    options[envVarName] || process.env[envVarName] || "",
+  );
+
+  if (configuredKeys.length === 0) {
+    if (state?.__voiceApiKeyRotators?.[envVarName]) {
+      return String(state.__voiceApiKeyRotators[envVarName]()).trim();
+    }
+
+    return "";
+  }
+
+  if (configuredKeys.length === 1) {
+    return String(configuredKeys[0]).trim();
+  }
+
+  if (!state.__voiceApiKeyRotators) {
+    state.__voiceApiKeyRotators = {};
+  }
+
+  if (!state.__voiceApiKeyRotators[envVarName]) {
+    state.__voiceApiKeyRotators[envVarName] = createKeyRotator(configuredKeys);
+  }
+
+  return String(state.__voiceApiKeyRotators[envVarName]()).trim();
+}
+
 // Creates a fetch wrapper that automatically rotates through API keys for each request.
 function createRotatedFetch(apiKeys, config = {}) {
   const normalizedKeys = normalizeApiKeys(apiKeys);
@@ -108,6 +136,7 @@ const apiKeyRotatorExports = {
   apiKeyGenerator,
   KeyRotatorManager,
   normalizeApiKeys,
+  resolveRotatedApiKey,
 };
 
 export {
@@ -116,6 +145,7 @@ export {
   apiKeyGenerator,
   KeyRotatorManager,
   normalizeApiKeys,
+  resolveRotatedApiKey,
 };
 export default apiKeyRotatorExports;
 

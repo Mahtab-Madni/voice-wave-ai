@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createKeyRotator, normalizeApiKeys } from "../apiKeyRotator.js";
+import {
+  createKeyRotator,
+  normalizeApiKeys,
+  resolveRotatedApiKey,
+} from "../apiKeyRotator.js";
 
 test("normalizeApiKeys trims and splits comma-separated values", () => {
   assert.deepEqual(normalizeApiKeys(" key-1 , key-2 , key-3 "), [
@@ -17,4 +21,19 @@ test("createKeyRotator returns keys in round-robin order", () => {
   assert.equal(getNextKey(), "key-2");
   assert.equal(getNextKey(), "key-3");
   assert.equal(getNextKey(), "key-1");
+});
+
+test("resolveRotatedApiKey resolves from options and rotates across values", () => {
+  const state = {};
+  const first = resolveRotatedApiKey(
+    "GROQ_API_KEY",
+    {
+      GROQ_API_KEY: "key-1, key-2",
+    },
+    state,
+  );
+  const second = resolveRotatedApiKey("GROQ_API_KEY", {}, state);
+
+  assert.equal(first, "key-1");
+  assert.equal(second, "key-2");
 });

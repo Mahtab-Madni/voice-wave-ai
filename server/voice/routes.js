@@ -2,7 +2,7 @@ import express from "express";
 import { SpeechifyClient } from "@speechify/api";
 import Project from "../models/Project.js";
 import { buildActionPlan } from "./planner.js";
-import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
+import { resolveRotatedApiKey } from "../../apiKeyRotator.js";
 
 const router = express.Router();
 
@@ -24,24 +24,7 @@ router.get("/dashboard", (_req, res) => {
 });
 
 function getRotatedApiKeyFromEnv(envVarName, options = {}) {
-  const configuredKeys = normalizeApiKeys(
-    options[envVarName] || process.env[envVarName] || "",
-  );
-
-  if (configuredKeys.length <= 1) {
-    return configuredKeys[0] || "";
-  }
-
-  if (!globalThis.__voiceApiKeyRotators) {
-    globalThis.__voiceApiKeyRotators = {};
-  }
-
-  if (!globalThis.__voiceApiKeyRotators[envVarName]) {
-    globalThis.__voiceApiKeyRotators[envVarName] =
-      createKeyRotator(configuredKeys);
-  }
-
-  return String(globalThis.__voiceApiKeyRotators[envVarName]()).trim();
+  return resolveRotatedApiKey(envVarName, options, globalThis);
 }
 
 router.post("/tts", async (req, res) => {
@@ -118,6 +101,7 @@ router.post("/process-intent", async (req, res) => {
 
   const action = await buildActionPlan(transcript, elements, {
     projectConfig,
+    groqApiKey: process.env.GROQ_API_KEY || req.body?.groqApiKey || null,
   });
   const previewElements = elements.slice(0, 12).map((entry) => ({
     ...entry,

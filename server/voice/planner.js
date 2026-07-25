@@ -1,4 +1,4 @@
-import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
+import { resolveRotatedApiKey } from "../../apiKeyRotator.js";
 
 const EXECUTION_ROUTING_SYSTEM_PROMPT = `You are the execution routing brain of an AI-powered web automation assistant. Your task is to match a natural-language command to the best interactive element or system action on the screen and produce an ordered execution plan.
 
@@ -117,24 +117,7 @@ function normalizeText(value) {
 }
 
 function getRotatedApiKeyFromEnv(envVarName, options = {}) {
-  const configuredKeys = normalizeApiKeys(
-    options[envVarName] || process.env[envVarName] || "",
-  );
-
-  if (configuredKeys.length <= 1) {
-    return configuredKeys[0] || "";
-  }
-
-  if (!globalThis.__voiceApiKeyRotators) {
-    globalThis.__voiceApiKeyRotators = {};
-  }
-
-  if (!globalThis.__voiceApiKeyRotators[envVarName]) {
-    globalThis.__voiceApiKeyRotators[envVarName] =
-      createKeyRotator(configuredKeys);
-  }
-
-  return String(globalThis.__voiceApiKeyRotators[envVarName]()).trim();
+  return resolveRotatedApiKey(envVarName, options, globalThis);
 }
 
 function getCommandKeywords(transcript) {
@@ -1086,8 +1069,11 @@ export async function buildActionPlan(transcript, elements, options = {}) {
 
   const fallback = buildRuleBasedActionPlan(transcript, elements);
   const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
-    GROQ_API_KEY: options.apiKey,
+    GROQ_API_KEY: options.apiKey || options.groqApiKey,
   });
+  console.log(
+    `[planner] groq key resolved: ${apiKey ? `${apiKey.slice(0, 6)}…` : "MISSING"}`,
+  );
   if (!apiKey) return fallback;
 
   const model =

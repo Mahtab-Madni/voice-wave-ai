@@ -3,7 +3,11 @@ import { WebSocketServer } from "ws";
 import { buildActionPlan } from "./planner.js";
 import Project from "../models/Project.js";
 import InteractionLog from "../models/InteractionLog.js";
-import { createKeyRotator, normalizeApiKeys } from "../../apiKeyRotator.js";
+import {
+  createKeyRotator,
+  normalizeApiKeys,
+  resolveRotatedApiKey,
+} from "../../apiKeyRotator.js";
 
 dotenv.config();
 
@@ -24,11 +28,7 @@ function getDeepgramApiKey(config = {}, keyRotator = null) {
     return String(keyRotator()).trim();
   }
 
-  const apiKeys = normalizeApiKeys(
-    config.deepgramApiKey ?? process.env.DEEPGRAM_API_KEY ?? "",
-  );
-
-  return apiKeys[0] ? String(apiKeys[0]).trim() : "";
+  return resolveRotatedApiKey("DEEPGRAM_API_KEY", config, globalThis);
 }
 
 function getEffectiveActionName(actionPlan) {

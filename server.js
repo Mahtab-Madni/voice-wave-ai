@@ -71,6 +71,7 @@ app.get("*", (req, res) => {
 const server = createServer(app);
 setupVoiceWebSocket(server, {
   deepgramApiKey: process.env.DEEPGRAM_API_KEY,
+  groqApiKey: process.env.GROQ_API_KEY,
   deepgramModel: process.env.DEEPGRAM_MODEL || "nova-2",
 });
 
