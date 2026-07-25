@@ -2549,7 +2549,7 @@
 
         setStatus(`Recognition error: ${event.error}`);
 
-        console.debug("[voice-widget] onerror state snapshot", {
+        console.warn("[voice-widget] onerror state snapshot", {
           error: event.error,
           processing: scriptState.processing,
           listening: scriptState.listening,
