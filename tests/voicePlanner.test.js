@@ -72,6 +72,62 @@ test("buildRuleBasedActionPlan introduces itself with project context", () => {
   assert.match(plan.message, /automation agent|Acme Commerce/i);
 });
 
+test("buildRuleBasedActionPlan prefers a visible nav link over a fabricated route", () => {
+  const plan = buildRuleBasedActionPlan("go to products page", [
+    {
+      element: "a",
+      text: "Products",
+      selector: "#nav-products",
+      contextText: "Navigation",
+      position: { x: 10, y: 10, width: 80, height: 24 },
+    },
+    {
+      element: "a",
+      text: "Contact",
+      selector: "#nav-contact",
+      contextText: "Navigation",
+      position: { x: 10, y: 40, width: 80, height: 24 },
+    },
+  ]);
+
+  assert.equal(plan.action, "CLICK");
+  assert.equal(plan.target, "#nav-products");
+});
+
+test("buildActionPlan tries the LLM first for short commands", async () => {
+  const originalFetch = global.fetch;
+  const originalOpenAIKey = process.env.OPENAI_API_KEY;
+  const originalGroqKey = process.env.GROQ_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  delete process.env.GROQ_API_KEY;
+
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            content:
+              '{"action":"CLICK","target":"#home","confidence":0.95,"reasoning":"matched home link"}',
+          },
+        },
+      ],
+    }),
+  });
+
+  try {
+    const plan = await buildActionPlan("go home", [], {});
+    assert.equal(plan.action, "CLICK");
+    assert.equal(plan.target, "#home");
+  } finally {
+    global.fetch = originalFetch;
+    if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    if (originalGroqKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = originalGroqKey;
+  }
+});
+
 test("buildActionPlan uses an OpenAI-style API key when available", async () => {
   const originalFetch = global.fetch;
   const originalOpenAIKey = process.env.OPENAI_API_KEY;

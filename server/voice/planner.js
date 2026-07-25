@@ -12,6 +12,7 @@ Rules:
   - Prefer direct matches by visible text, aria-label, id, placeholder, or class tokens that clearly map to the command.
   - If several elements share the same label, use their contextText (surrounding parent container header/title text), spatial coordinates, and surrounding hierarchy to choose the element in the requested visual group.
   - Use fuzzy semantic equivalence for intent phrasing (for example, "go to checkout" can match cart, checkout, proceed to pay, payment links, or buttons labeled "Pay").
+  - For navigation requests like "go to products" or "open contact", first inspect the visible navigation/menu elements in the DOM and prefer a matching CLICK on those elements when one exists; do not invent a route like "/product-page" unless the user explicitly provided a URL/path.
   - Use project context/description and recent conversation context as strong signals to disambiguate intent and preserve the user's flow (for example, prefer elements in the same card or form recently referenced).
 
 2. Multi-Step Planning:
@@ -32,7 +33,7 @@ Rules:
   - SCROLL: Set target to null (or specific scrollable container), direction to "up" or "down", amount to scroll distance in pixels (for example, 400 or 600).
   - ZOOM: Set target to null, direction to "in", "out", or "reset", amount to scale factor (for example, 1.25 for in, 0.8 for out, 1.0 for reset).
   - PRESS_KEY: Set target to focused element selector or null, value to key name (for example, "Enter", "Escape", "Tab").
-  - NAVIGATE: Set target to null, value to target URL or path.
+  - NAVIGATE: Set target to null, value to target URL or path. Use this only when the user explicitly provided a URL/path or the page clearly requires a browser navigation event; otherwise prefer a CLICK on a visible navigation element.
   - GO_BACK / GO_FORWARD / RELOAD / SUMMARIZE_PAGE: Set target to null.
   - RESPOND: Use when the user requests an informational answer (no DOM interaction). Set message to a concise human-readable summary for display and TTS. Optionally provide ttsContext for improved speech output.
   - CLARIFY: Use when multiple plausible targets or missing information prevent a safe single action. Return clarifyOptions as an array of { label: string, selector: string } or choices; set message to an instruction the UI can speak/display. Do not attempt an interaction when emitting CLARIFY.
@@ -238,17 +239,37 @@ function extractNavigationTarget(transcript) {
   const explicitUrl = transcript.match(/https?:\/\/[^\s]+/i)?.[0];
   if (explicitUrl) return explicitUrl;
 
-  const namedTarget = transcript.match(
-    /(?:go to|navigate to|open|visit|go to the|open the)\s+(?:the\s+)?([a-z0-9./_-]+(?:\s+[a-z0-9./_-]+)*)/i,
-  );
-  if (namedTarget?.[1]) {
-    const normalizedTarget = namedTarget[1].trim().replace(/\s+/g, "-");
-    return normalizedTarget.startsWith("/")
-      ? normalizedTarget
-      : `/${normalizedTarget}`;
-  }
+  const explicitPath = transcript.match(/(?:to|for)\s+(\/[^\s]+)/i)?.[1];
+  if (explicitPath) return explicitPath;
 
-  return "/";
+  return null;
+}
+
+function findVisibleNavigationTarget(transcript, elements = []) {
+  const normalizedTranscript = normalizeText(transcript);
+  const sectionKeywords =
+    /products|pricing|about|contact|shop|home|blog|docs|login|signup|register|support|help/i;
+
+  if (!sectionKeywords.test(normalizedTranscript)) return null;
+
+  return (
+    (elements || []).find((entry) => {
+      const label = normalizeText(
+        [
+          entry?.text,
+          entry?.ariaLabel,
+          entry?.placeholder,
+          entry?.id,
+          entry?.title,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+
+      if (!label) return false;
+      return sectionKeywords.test(label);
+    }) || null
+  );
 }
 
 function extractPressedKey(transcript) {
@@ -776,14 +797,64 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
   }
 
   if (/navigate to|go to|open the|visit/i.test(normalizedTranscript)) {
-    return {
-      action: "NAVIGATE",
-      target: null,
-      value: extractNavigationTarget(transcript),
-      scrollRequired: false,
-      confidence: 0.9,
-      reasoning: "Matched navigation intent.",
-    };
+    const explicitNavigationTarget = extractNavigationTarget(transcript);
+    const isExplicitDestination = Boolean(
+      (explicitNavigationTarget &&
+        /https?:\/\//i.test(explicitNavigationTarget)) ||
+      explicitNavigationTarget?.startsWith("/"),
+    );
+
+    if (isExplicitDestination) {
+      return {
+        action: "NAVIGATE",
+        target: null,
+        value: explicitNavigationTarget,
+        scrollRequired: false,
+        confidence: 0.9,
+        reasoning: "Matched explicit navigation intent.",
+      };
+    }
+
+    const pageSectionTarget = (elements || []).find((entry) => {
+      const label = normalizeText(
+        [
+          entry?.text,
+          entry?.ariaLabel,
+          entry?.placeholder,
+          entry?.id,
+          entry?.title,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      if (!label) return false;
+
+      return /products|pricing|about|contact|shop|home|blog|docs|login|signup|register|support|help/i.test(
+        label,
+      );
+    });
+
+    if (pageSectionTarget) {
+      return {
+        action: "CLICK",
+        target: pageSectionTarget.selector || null,
+        scrollRequired: Boolean(pageSectionTarget.scrollRequired),
+        confidence: 0.92,
+        reasoning:
+          "Matched visible navigation element for the requested page section.",
+      };
+    }
+
+    if (explicitNavigationTarget) {
+      return {
+        action: "NAVIGATE",
+        target: null,
+        value: explicitNavigationTarget,
+        scrollRequired: false,
+        confidence: 0.9,
+        reasoning: "Matched inferred navigation target.",
+      };
+    }
   }
 
   if (/press|hit|key/i.test(normalizedTranscript)) {
@@ -1250,6 +1321,30 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     const parsedActionPlan =
       typeof content === "string" ? JSON.parse(content) : content;
     const normalizedActionPlan = normalizeActionPlan(parsedActionPlan);
+    const explicitNavigationTarget = extractNavigationTarget(transcript);
+    const pageSectionTarget = findVisibleNavigationTarget(
+      transcript,
+      optimizedElements,
+    );
+
+    if (
+      !explicitNavigationTarget &&
+      pageSectionTarget &&
+      normalizedActionPlan.action === "NAVIGATE"
+    ) {
+      normalizedActionPlan.action = "CLICK";
+      normalizedActionPlan.target = pageSectionTarget.selector || null;
+      normalizedActionPlan.scrollRequired = Boolean(
+        pageSectionTarget.scrollRequired,
+      );
+      normalizedActionPlan.confidence = Math.max(
+        normalizedActionPlan.confidence,
+        0.92,
+      );
+      normalizedActionPlan.reasoning =
+        "Matched visible navigation element for the requested page section.";
+    }
+
     const ttsContext = await generateTtsContext(
       transcript,
       normalizedActionPlan,
