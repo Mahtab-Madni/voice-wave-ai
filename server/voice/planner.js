@@ -501,12 +501,12 @@ async function generateTtsContext(
   const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
     GROQ_API_KEY: options.apiKey || options.groqApiKey,
   });
-  if (!apiKey) return fallback;
-
-  const baseUrl =
-    options.baseUrl ||
-    process.env.OPENAI_BASE_URL ||
-    "https://api.groq.com/openai/v1";
+  if (!apiKey) {
+    console.warn(
+      "[llm] GROQ_API_KEY not found in process.env — generateTtsContext using rule-based fallback instead of LLM",
+    );
+    return fallback;
+  }
   const model =
     options.model ||
     process.env.GROQ_CHAT_MODEL ||
@@ -1172,7 +1172,12 @@ export async function buildActionPlan(transcript, elements, options = {}) {
   const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
     GROQ_API_KEY: options.apiKey,
   });
-  if (!apiKey) return fallback;
+  if (!apiKey) {
+    console.warn(
+      "[llm] GROQ_API_KEY not found in process.env — buildActionPlan using rule-based fallback instead of the real LLM. Automation is running on keyword matching only.",
+    );
+    return fallback;
+  }
 
   const model =
     options.model ||
