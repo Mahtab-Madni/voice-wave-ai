@@ -162,3 +162,56 @@ test("buildActionPlan uses an OpenAI-style API key when available", async () => 
     else process.env.GROQ_API_KEY = originalGroqKey;
   }
 });
+
+test("buildActionPlan retries with a fallback model when the first provider model fails", async () => {
+  const originalFetch = global.fetch;
+  const originalOpenAIKey = process.env.OPENAI_API_KEY;
+  const originalGroqKey = process.env.GROQ_API_KEY;
+  const originalGroqModel = process.env.GROQ_CHAT_MODEL;
+  process.env.OPENAI_API_KEY = "";
+  process.env.GROQ_API_KEY = "test-groq-key";
+  process.env.GROQ_CHAT_MODEL = "openai/gpt-oss-120b";
+
+  let calls = 0;
+  global.fetch = async (_url, options) => {
+    calls += 1;
+    const body = JSON.parse(options.body);
+    if (calls === 1) {
+      return {
+        ok: false,
+        status: 400,
+        text: async () =>
+          JSON.stringify({ error: { message: "model not found" } }),
+      };
+    }
+
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content:
+                '{"action":"CLICK","target":"#support","confidence":0.93,"reasoning":"matched support link"}',
+            },
+          },
+        ],
+      }),
+    };
+  };
+
+  try {
+    const plan = await buildActionPlan("go to support", [], {});
+    assert.equal(plan.action, "CLICK");
+    assert.equal(plan.target, "#support");
+    assert.ok(calls >= 2);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    if (originalGroqKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = originalGroqKey;
+    if (originalGroqModel === undefined) delete process.env.GROQ_CHAT_MODEL;
+    else process.env.GROQ_CHAT_MODEL = originalGroqModel;
+  }
+});

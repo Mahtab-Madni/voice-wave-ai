@@ -183,6 +183,75 @@ function resolveLlmSettings(options = {}) {
   };
 }
 
+function getFallbackModels(model, provider) {
+  const normalizedModel = String(model || "").trim();
+  const normalizedProvider = String(provider || "").toLowerCase();
+
+  if (normalizedProvider === "groq") {
+    const preferred = normalizedModel;
+    const candidates = [
+      preferred,
+      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant",
+    ];
+    return [...new Set(candidates.filter(Boolean))];
+  }
+
+  if (normalizedProvider === "openai") {
+    const preferred = normalizedModel;
+    const candidates = [preferred, "gpt-4o-mini", "gpt-4.1-mini"];
+    return [...new Set(candidates.filter(Boolean))];
+  }
+
+  return [normalizedModel || "gpt-4o-mini"].filter(Boolean);
+}
+
+async function callLlmWithFallback(payload, llmConfig) {
+  const { apiKey, baseUrl, model, provider } = llmConfig;
+  const modelsToTry = getFallbackModels(model, provider);
+
+  let lastError = null;
+
+  for (let index = 0; index < modelsToTry.length; index += 1) {
+    const modelToTry = modelsToTry[index];
+    const requestBody = {
+      ...payload,
+      model: modelToTry,
+    };
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const message = errorText || `LLM request failed: ${response.status}`;
+        lastError = new Error(message);
+        if (response.status >= 500 || response.status === 400) {
+          continue;
+        }
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+      return { data, model: modelToTry };
+    } catch (error) {
+      lastError = error;
+      if (index === modelsToTry.length - 1) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("LLM request failed");
+}
+
 function getCommandKeywords(transcript) {
   const tokens = normalizeText(transcript).split(/\s+/);
   const stopWords = new Set([
@@ -1290,14 +1359,8 @@ export async function buildActionPlan(transcript, elements, options = {}) {
   const conversationContext = String(options.conversationContext || "").trim();
 
   try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
+    const { data } = await callLlmWithFallback(
+      {
         temperature: 0.1,
         response_format: { type: "json_object" },
         messages: [
@@ -1313,11 +1376,10 @@ export async function buildActionPlan(transcript, elements, options = {}) {
             }),
           },
         ],
-      }),
-    });
+      },
+      llmConfig,
+    );
 
-    if (!response.ok) throw new Error(`LLM request failed: ${response.status}`);
-    const data = await response.json();
     const content = data?.choices?.[0]?.message?.content || "{}";
     const parsedActionPlan =
       typeof content === "string" ? JSON.parse(content) : content;
