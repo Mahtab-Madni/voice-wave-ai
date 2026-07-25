@@ -142,6 +142,45 @@ function getRotatedApiKeyFromEnv(envVarName, options = {}) {
   return String(globalThis.__voiceApiKeyRotators[envVarName]()).trim();
 }
 
+function resolveLlmSettings(options = {}) {
+  const explicitKey = String(
+    options.apiKey || options.groqApiKey || options.openaiApiKey || "",
+  ).trim();
+  const openAiKey = String(
+    options.openaiApiKey || process.env.OPENAI_API_KEY || "",
+  ).trim();
+  const groqKey = String(
+    options.groqApiKey || process.env.GROQ_API_KEY || "",
+  ).trim();
+  const apiKey = explicitKey || openAiKey || groqKey || "";
+  const baseUrl = String(
+    options.baseUrl ||
+      process.env.OPENAI_BASE_URL ||
+      process.env.GROQ_BASE_URL ||
+      "",
+  ).trim();
+  const inferredBaseUrl =
+    baseUrl ||
+    (openAiKey
+      ? "https://api.openai.com/v1"
+      : groqKey
+        ? "https://api.groq.com/openai/v1"
+        : "");
+  const model = String(
+    options.model ||
+      process.env.OPENAI_MODEL ||
+      process.env.GROQ_CHAT_MODEL ||
+      "gpt-4o-mini",
+  ).trim();
+
+  return {
+    apiKey,
+    baseUrl: inferredBaseUrl,
+    model,
+    provider: openAiKey ? "openai" : groqKey ? "groq" : "none",
+  };
+}
+
 function getCommandKeywords(transcript) {
   const tokens = normalizeText(transcript).split(/\s+/);
   const stopWords = new Set([
@@ -498,26 +537,14 @@ async function generateTtsContext(
   options = {},
 ) {
   const fallback = buildFallbackTtsContext(transcript, actionPlan, elements);
-  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
-    GROQ_API_KEY: options.apiKey || options.groqApiKey,
-  });
-  if (!apiKey) {
+  const llmConfig = resolveLlmSettings(options);
+  if (!llmConfig.apiKey || !llmConfig.baseUrl) {
     console.warn(
-      "[llm] GROQ_API_KEY not found in process.env — generateTtsContext using rule-based fallback instead of LLM",
+      "[llm] no LLM API key or base URL configured — generateTtsContext using rule-based fallback instead of LLM",
     );
     return fallback;
   }
-  const model =
-    options.model ||
-    process.env.GROQ_CHAT_MODEL ||
-    process.env.OPENAI_MODEL ||
-    "llama-3.3-70b-versatile";
-     const baseUrl =
-       options.baseUrl ||
-       process.env.OPENAI_BASE_URL ||
-       (process.env.OPENAI_API_KEY
-         ? "https://api.openai.com/v1"
-         : "https://api.groq.com/openai/v1");
+  const { apiKey, baseUrl, model } = llmConfig;
 
   try {
     const isSummaryAction =
@@ -1175,27 +1202,15 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     };
   }
 
-  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
-    GROQ_API_KEY: options.apiKey,
-  });
-  if (!apiKey) {
+  const llmConfig = resolveLlmSettings(options);
+  if (!llmConfig.apiKey || !llmConfig.baseUrl) {
     console.warn(
-      "[llm] GROQ_API_KEY not found in process.env — buildActionPlan using rule-based fallback instead of the real LLM. Automation is running on keyword matching only.",
+      "[llm] no LLM API key or base URL configured — buildActionPlan using rule-based fallback instead of the real LLM. Automation is running on keyword matching only.",
     );
     return fallback;
   }
 
-  const model =
-    options.model ||
-    process.env.OPENAI_MODEL ||
-    process.env.GROQ_CHAT_MODEL ||
-    "gpt-4o-mini";
-  const baseUrl =
-    options.baseUrl ||
-    process.env.OPENAI_BASE_URL ||
-    (process.env.OPENAI_API_KEY
-      ? "https://api.openai.com/v1"
-      : "https://api.groq.com/openai/v1");
+  const { apiKey, baseUrl, model } = llmConfig;
 
   const projectContext = buildProjectContext(
     options.projectConfig || options.projectContext || options.context || {},

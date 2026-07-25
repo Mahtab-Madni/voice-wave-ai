@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildActionPlan,
   buildRuleBasedActionPlan,
   normalizeActionPlan,
 } from "../server/voice/planner.js";
@@ -69,4 +70,39 @@ test("buildRuleBasedActionPlan introduces itself with project context", () => {
 
   assert.equal(plan.action, "RESPOND");
   assert.match(plan.message, /automation agent|Acme Commerce/i);
+});
+
+test("buildActionPlan uses an OpenAI-style API key when available", async () => {
+  const originalFetch = global.fetch;
+  const originalOpenAIKey = process.env.OPENAI_API_KEY;
+  const originalGroqKey = process.env.GROQ_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+  delete process.env.GROQ_API_KEY;
+
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            content:
+              '{"action":"CLICK","target":"#contact","confidence":0.95,"reasoning":"matched contact link"}',
+          },
+        },
+      ],
+    }),
+  });
+
+  try {
+    const plan = await buildActionPlan("go to contact", [], {});
+    assert.equal(plan.action, "CLICK");
+    assert.equal(plan.target, "#contact");
+    assert.equal(plan.confidence, 0.95);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    if (originalGroqKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = originalGroqKey;
+  }
 });
