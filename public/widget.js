@@ -635,6 +635,7 @@
     mediaMimeType: null,
     chunkFlushTimer: null,
     pendingAudioControlState: null,
+    pendingAudioControlProjectId: null,
     audioControlState: "idle",
     transcriptDispatchInFlight: new Set(),
     transcriptionMode: "browser",
@@ -661,9 +662,18 @@
 
   const currentScript =
     document.currentScript ||
-    Array.from(document.scripts).find((script) =>
-      /widget\.js(?:\?.*)?$/.test(script.src),
-    );
+    Array.from(document.scripts).find((script) => {
+      if (!script.src) return false;
+      try {
+        const url = new URL(script.src, window.location.href);
+        return (
+          url.pathname.endsWith("/widget.js") ||
+          url.pathname.endsWith("widget.js")
+        );
+      } catch {
+        return /widget\.js(?:\?.*)?$/.test(script.src);
+      }
+    });
   const defaultApiUrl = "https://voice-wave-ai-production.up.railway.app";
   const defaultWsUrl = "wss://voice-wave-ai-production.up.railway.app";
   const configuredApiUrl =
@@ -2175,15 +2185,15 @@
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
     ) {
-      scriptState.socket.send(
-        JSON.stringify({
-          type: "intent",
-          transcript: trimmedText,
-          elements,
-          structured,
-          projectId: currentScript?.getAttribute("data-project-id") || "",
-        }),
-      );
+      const payload = {
+        type: "intent",
+        transcript: trimmedText,
+        elements,
+        structured,
+        projectId: getProjectId(),
+      };
+      console.debug("[voice-widget] sending intent payload", payload);
+      scriptState.socket.send(JSON.stringify(payload));
     } else {
       postIntentToBackend(trimmedText, elements, structured);
     }
@@ -2224,6 +2234,18 @@
     }
   }
 
+  function getProjectId() {
+    const projectId =
+      window.__VOICE_WIDGET_PROJECT_ID__ ||
+      currentScript?.getAttribute("data-project-id") ||
+      currentScript?.dataset?.projectId ||
+      "";
+    if (!projectId) {
+      console.warn("[voice-widget] no data-project-id found on widget script");
+    }
+    return projectId;
+  }
+
   function sendSocketPayload(payload) {
     if (
       scriptState.socket &&
@@ -2239,6 +2261,7 @@
     }
     if (payload.type === "audio-control") {
       scriptState.pendingAudioControlState = payload.state;
+      scriptState.pendingAudioControlProjectId = payload.projectId || null;
     } else {
       console.warn(
         "[voice-widget] socket unavailable for payload, falling back if possible",
@@ -2253,8 +2276,10 @@
     sendSocketPayload({
       type: "audio-control",
       state: scriptState.pendingAudioControlState,
+      projectId: scriptState.pendingAudioControlProjectId || getProjectId(),
     });
     scriptState.pendingAudioControlState = null;
+    scriptState.pendingAudioControlProjectId = null;
   }
 
   function openSocket() {
@@ -2704,7 +2729,11 @@
     scriptState.processing = false;
     scriptState.listening = false;
     openSocket();
-    sendSocketPayload({ type: "audio-control", state: "start" });
+    sendSocketPayload({
+      type: "audio-control",
+      state: "start",
+      projectId: getProjectId(),
+    });
     setListeningState(false);
     setStatus("Requesting microphone access...");
     setFeedback("Requesting microphone access...");

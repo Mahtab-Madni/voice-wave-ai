@@ -321,6 +321,14 @@ export function setupVoiceWebSocket(server, config = {}) {
             }
           }
 
+          console.debug("[ws] starting intent processing", {
+            transcript: payload.transcript,
+            projectId: payload.projectId,
+          });
+          console.debug("[ws] starting intent processing", {
+            transcript: payload.transcript,
+            projectId: payload.projectId,
+          });
           const action = await buildActionPlan(
             payload.transcript,
             payload.elements || [],
@@ -333,6 +341,10 @@ export function setupVoiceWebSocket(server, config = {}) {
               sessionId: clientId,
             },
           );
+          console.debug("[ws] intent processed", {
+            action: action?.action,
+            projectId: payload.projectId,
+          });
 
           session.conversationContext.push({
             transcript: payload.transcript,
@@ -376,7 +388,22 @@ export function setupVoiceWebSocket(server, config = {}) {
             }
           }
 
-          socket.send(JSON.stringify({ type: "action", action }));
+          try {
+            socket.send(JSON.stringify({ type: "action", action }));
+            console.debug("[ws] sent action payload", {
+              action: action?.action,
+              projectId: payload.projectId,
+            });
+          } catch (sendError) {
+            console.error(
+              "[ws] failed to send action payload",
+              sendError.message,
+            );
+          }
+          console.debug("[ws] sent action payload", {
+            action: action?.action,
+            projectId: payload.projectId,
+          });
         }
       } catch (error) {
         console.error(`[ws error] ${clientId}:`, error.message);
