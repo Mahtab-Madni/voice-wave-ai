@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import express from "express";
 import { createServer } from "http";
 import { dirname, join } from "path";
@@ -52,6 +53,19 @@ app.use("/api", metricsRoutes);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "voice-accessibility-wave" });
+});
+
+app.get("*", (req, res) => {
+  if (req.path.startsWith("/api/")) {
+    return res.status(404).json({ error: "Not found" });
+  }
+
+  const indexPath = join(__dirname, "website", "dist", "index.html");
+  if (existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+
+  return res.status(404).send("Not found");
 });
 
 const server = createServer(app);
