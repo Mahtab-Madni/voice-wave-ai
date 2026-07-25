@@ -1390,22 +1390,26 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       optimizedElements,
     );
 
-    if (
-      !explicitNavigationTarget &&
-      pageSectionTarget &&
-      normalizedActionPlan.action === "NAVIGATE"
-    ) {
-      normalizedActionPlan.action = "CLICK";
-      normalizedActionPlan.target = pageSectionTarget.selector || null;
-      normalizedActionPlan.scrollRequired = Boolean(
-        pageSectionTarget.scrollRequired,
-      );
-      normalizedActionPlan.confidence = Math.max(
-        normalizedActionPlan.confidence,
-        0.92,
-      );
-      normalizedActionPlan.reasoning =
-        "Matched visible navigation element for the requested page section.";
+    if (pageSectionTarget) {
+      const shouldPatchClickTarget =
+        !normalizedActionPlan.target && normalizedActionPlan.action === "CLICK";
+
+      const shouldPatchNavigateTarget =
+        !explicitNavigationTarget && normalizedActionPlan.action === "NAVIGATE";
+
+      if (shouldPatchClickTarget || shouldPatchNavigateTarget) {
+        normalizedActionPlan.action = "CLICK";
+        normalizedActionPlan.target = pageSectionTarget.selector || null;
+        normalizedActionPlan.scrollRequired = Boolean(
+          pageSectionTarget.scrollRequired,
+        );
+        normalizedActionPlan.confidence = Math.max(
+          normalizedActionPlan.confidence,
+          0.92,
+        );
+        normalizedActionPlan.reasoning =
+          "Matched visible navigation element for the requested page section.";
+      }
     }
 
     const ttsContext = await generateTtsContext(

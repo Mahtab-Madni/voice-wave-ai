@@ -348,6 +348,8 @@ export function setupVoiceWebSocket(server, config = {}) {
           );
           console.debug("[ws] intent processed", {
             action: action?.action,
+            target: action?.target,
+            confidence: action?.confidence,
             projectId: payload.projectId,
           });
 
