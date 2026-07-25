@@ -2549,6 +2549,14 @@
 
         setStatus(`Recognition error: ${event.error}`);
 
+        console.debug("[voice-widget] onerror state snapshot", {
+          error: event.error,
+          processing: scriptState.processing,
+          listening: scriptState.listening,
+          sessionActive: scriptState.sessionActive,
+          userInitiatedStop: scriptState.userInitiatedStop,
+        });
+
         // "no-speech" is Chrome's own silence timeout, and "aborted" can be
         // this exact instance being intentionally stopped moments before a
         // deliberate restart. Neither means the session actually failed —
