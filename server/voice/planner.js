@@ -153,7 +153,8 @@ function resolveLlmSettings(options = {}) {
   const groqKey = String(
     options.groqApiKey || process.env.GROQ_API_KEY || "",
   ).trim();
-  const apiKey = explicitKey || openAiKey || groqKey || "";
+  const configuredKey = explicitKey || openAiKey || groqKey || "";
+  const apiKey = normalizeApiKeys(configuredKey)[0] || "";
   const baseUrl = String(
     options.baseUrl ||
       process.env.OPENAI_BASE_URL ||
