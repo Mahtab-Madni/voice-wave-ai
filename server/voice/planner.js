@@ -442,7 +442,9 @@ async function generateTtsContext(
   const baseUrl =
     options.baseUrl ||
     process.env.OPENAI_BASE_URL ||
-    "https://api.groq.com/openai/v1";
+    (apiKey && apiKey.startsWith("gsk_")
+      ? "https://api.groq.com/openai/v1"
+      : "https://api.groq.com/openai/v1");
   const model =
     options.model ||
     process.env.GROQ_CHAT_MODEL ||
@@ -464,6 +466,7 @@ async function generateTtsContext(
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        Accept: "application/json",
       },
       body: JSON.stringify({
         model,
@@ -1067,26 +1070,29 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     .map(({ relevanceScore, ...el }) => el)
     .slice(0, 20);
 
-  const fallback = buildRuleBasedActionPlan(transcript, elements);
   const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
     GROQ_API_KEY: options.apiKey || options.groqApiKey,
   });
   console.log(
     `[planner] groq key resolved: ${apiKey ? `${apiKey.slice(0, 6)}…` : "MISSING"}`,
   );
-  if (!apiKey) return fallback;
+  if (!apiKey) {
+    throw new Error("GROQ API key is required for LLM planning");
+  }
 
   const model =
     options.model ||
     process.env.OPENAI_MODEL ||
     process.env.GROQ_CHAT_MODEL ||
-    "gpt-4o-mini";
+    "llama-3.3-70b-versatile";
   const baseUrl =
     options.baseUrl ||
     process.env.OPENAI_BASE_URL ||
-    (process.env.OPENAI_API_KEY
-      ? "https://api.openai.com/v1"
-      : "https://api.groq.com/openai/v1");
+    (apiKey && apiKey.startsWith("gsk_")
+      ? "https://api.groq.com/openai/v1"
+      : process.env.OPENAI_API_KEY
+        ? "https://api.openai.com/v1"
+        : "https://api.groq.com/openai/v1");
 
   const projectContext = buildProjectContext(
     options.projectConfig || options.projectContext || options.context || {},
@@ -1099,6 +1105,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        Accept: "application/json",
       },
       body: JSON.stringify({
         model,
@@ -1137,16 +1144,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       ttsContext,
     };
   } catch (error) {
-    console.warn("[llm] falling back to rule-based planner:", error.message);
-    const ttsContext = await generateTtsContext(
-      transcript,
-      fallback,
-      elements,
-      { apiKey, baseUrl, model, projectContext, conversationContext },
-    );
-    return {
-      ...fallback,
-      ttsContext,
-    };
+    console.error("[llm] planning failed:", error.message);
+    throw error;
   }
 }

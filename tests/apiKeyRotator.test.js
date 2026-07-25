@@ -37,3 +37,11 @@ test("resolveRotatedApiKey resolves from options and rotates across values", () 
   assert.equal(first, "key-1");
   assert.equal(second, "key-2");
 });
+
+test("buildActionPlan rejects planning when no Groq key is available", async () => {
+  const { buildActionPlan } = await import("../server/voice/planner.js");
+  await assert.rejects(
+    () => buildActionPlan("click the cart button", [], { groqApiKey: "" }),
+    /GROQ API key is required for LLM planning/,
+  );
+});

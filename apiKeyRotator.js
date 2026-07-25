@@ -1,13 +1,17 @@
 // Normalizes API keys from an array or comma-separated string into a clean array of strings.
 function normalizeApiKeys(apiKeys) {
   if (Array.isArray(apiKeys)) {
-    return apiKeys.map((key) => String(key ?? "").trim()).filter(Boolean);
+    return apiKeys
+      .map((key) => String(key ?? "").trim())
+      .map((key) => key.replace(/^['"]|['"]$/g, ""))
+      .filter(Boolean);
   }
 
   if (typeof apiKeys === "string") {
     return apiKeys
       .split(",")
       .map((key) => key.trim())
+      .map((key) => key.replace(/^['"]|['"]$/g, ""))
       .filter(Boolean);
   }
 
