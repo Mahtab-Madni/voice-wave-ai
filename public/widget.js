@@ -2070,7 +2070,10 @@
     scriptState.processing = true;
     setProcessingState(true);
     setStatus("Processing command...");
-    setFeedback("Processing command...");
+    const transcript = String(scriptState.latestTranscript || "").trim();
+    setFeedback(
+      transcript ? `Processing: ${transcript}` : "Processing command...",
+    );
     pauseAudioCapture();
   }
 
@@ -2433,6 +2436,15 @@
       recognition.lang = "en-US";
 
       recognition.onresult = (event) => {
+        if (
+          scriptState.recognition !== recognition ||
+          scriptState.recognitionSessionId !== recognitionSessionId
+        ) {
+          console.debug(
+            "[voice-widget] onresult ignored: stale recognition instance",
+          );
+          return;
+        }
         let interimText = "";
         let finalText = "";
         for (

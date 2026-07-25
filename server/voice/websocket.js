@@ -405,10 +405,6 @@ export function setupVoiceWebSocket(server, config = {}) {
               sendError.message,
             );
           }
-          console.debug("[ws] sent action payload", {
-            action: action?.action,
-            projectId: payload.projectId,
-          });
         }
       } catch (error) {
         console.error(`[ws error] ${clientId}:`, error.message);
