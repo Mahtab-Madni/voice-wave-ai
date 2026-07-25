@@ -31,6 +31,20 @@ function getDeepgramApiKey(config = {}, keyRotator = null) {
   return apiKeys[0] ? String(apiKeys[0]).trim() : "";
 }
 
+function getEffectiveActionName(actionPlan) {
+  const firstPlanStep = Array.isArray(actionPlan?.plan)
+    ? actionPlan.plan.find(Boolean)
+    : Array.isArray(actionPlan?.actions)
+      ? actionPlan.actions.find(Boolean)
+      : Array.isArray(actionPlan?.steps)
+        ? actionPlan.steps.find(Boolean)
+        : null;
+
+  return String(
+    actionPlan?.action || firstPlanStep?.action || "NONE",
+  ).toUpperCase();
+}
+
 function buildConversationSummary(conversationContext = []) {
   if (!Array.isArray(conversationContext) || conversationContext.length === 0) {
     return "";
@@ -275,9 +289,11 @@ export function setupVoiceWebSocket(server, config = {}) {
             },
           );
 
+          const effectiveAction = getEffectiveActionName(action);
+
           session.conversationContext.push({
             transcript: payload.transcript,
-            action: action?.action || "NONE",
+            action: effectiveAction,
             ttsContext: action?.ttsContext || "",
           });
 
@@ -287,8 +303,8 @@ export function setupVoiceWebSocket(server, config = {}) {
                 project: payload.projectId,
                 transcript: payload.transcript,
                 matchedSelector: action?.target || null,
-                action: action?.action || "NONE",
-                success: Boolean(action?.action && action.action !== "NONE"),
+                action: effectiveAction,
+                success: Boolean(effectiveAction && effectiveAction !== "NONE"),
                 confidence: Number(action?.confidence || 0),
                 sessionId: clientId,
                 conversationContext: buildConversationSummary(

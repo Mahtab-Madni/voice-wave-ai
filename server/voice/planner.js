@@ -137,60 +137,6 @@ function getRotatedApiKeyFromEnv(envVarName, options = {}) {
   return String(globalThis.__voiceApiKeyRotators[envVarName]()).trim();
 }
 
-async function callChatCompletions({
-  apiKeys,
-  baseUrl,
-  model,
-  systemPrompt,
-  userContent,
-  temperature = 0.1,
-  responseFormat = { type: "json_object" },
-}) {
-  const configuredKeys = normalizeApiKeys(apiKeys);
-  if (configuredKeys.length === 0) {
-    throw new Error("No API key configured");
-  }
-
-  let lastError;
-  for (const apiKey of configuredKeys) {
-    try {
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          temperature,
-          response_format: responseFormat,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userContent },
-          ],
-        }),
-      });
-
-      if (response.ok) {
-        return response;
-      }
-
-      const errorBody = await response.text().catch(() => "");
-      lastError = new Error(
-        `LLM request failed: ${response.status}${errorBody ? ` ${errorBody}` : ""}`,
-      );
-
-      if (response.status !== 401 && response.status !== 403) {
-        break;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error("LLM request failed");
-}
-
 function getCommandKeywords(transcript) {
   const tokens = normalizeText(transcript).split(/\s+/);
   const stopWords = new Set([
@@ -505,12 +451,9 @@ async function generateTtsContext(
   options = {},
 ) {
   const fallback = buildFallbackTtsContext(transcript, actionPlan, elements);
-  const configuredApiKeys = normalizeApiKeys(
-    [options.apiKey, options.groqApiKey, process.env.GROQ_API_KEY]
-      .filter(Boolean)
-      .join(","),
-  );
-  const apiKey = configuredApiKeys[0] || "";
+  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
+    GROQ_API_KEY: options.apiKey || options.groqApiKey,
+  });
   if (!apiKey) return fallback;
 
   const baseUrl =
@@ -533,23 +476,38 @@ async function generateTtsContext(
 “I’m adding the iPhone to your cart.”
 “Navigating to the requested page.”`;
 
-    const response = await callChatCompletions({
-      apiKeys: configuredApiKeys,
-      baseUrl,
-      model,
-      systemPrompt,
-      userContent: JSON.stringify({
-        transcript,
-        action: actionPlan?.action || "CLICK",
-        target: actionPlan?.target || null,
-        targetText: actionPlan?.reasoning || null,
-        conversationContext: buildConversationContextPrompt(
-          options.conversationContext || "",
-        ),
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt,
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              transcript,
+              action: actionPlan?.action || "CLICK",
+              target: actionPlan?.target || null,
+              targetText: actionPlan?.reasoning || null,
+              conversationContext: buildConversationContextPrompt(
+                options.conversationContext || "",
+              ),
+            }),
+          },
+        ],
       }),
-      temperature: 0.2,
     });
 
+    if (!response.ok)
+      throw new Error(`TTS context generation failed: ${response.status}`);
     const data = await response.json();
     const generated = String(data?.choices?.[0]?.message?.content || "").trim();
     return generated || fallback;
@@ -1039,7 +997,24 @@ export function normalizeActionPlan(actionPlan) {
     };
   }
 
-  const normalizedAction = String(actionPlan.action || "NONE").toUpperCase();
+  const confidenceValue =
+    typeof actionPlan.confidence === "number"
+      ? actionPlan.confidence
+      : typeof actionPlan.confidence === "string"
+        ? Number(actionPlan.confidence)
+        : undefined;
+
+  const plan = Array.isArray(actionPlan.plan)
+    ? actionPlan.plan.filter(Boolean)
+    : Array.isArray(actionPlan.actions)
+      ? actionPlan.actions.filter(Boolean)
+      : Array.isArray(actionPlan.steps)
+        ? actionPlan.steps.filter(Boolean)
+        : [];
+
+  const normalizedAction = String(
+    actionPlan.action || plan[0]?.action || "NONE",
+  ).toUpperCase();
   const allowedActions = [
     "CLICK",
     "RESPOND",
@@ -1064,21 +1039,6 @@ export function normalizeActionPlan(actionPlan) {
   const action = allowedActions.includes(normalizedAction)
     ? normalizedAction
     : "NONE";
-
-  const confidenceValue =
-    typeof actionPlan.confidence === "number"
-      ? actionPlan.confidence
-      : typeof actionPlan.confidence === "string"
-        ? Number(actionPlan.confidence)
-        : undefined;
-
-  const plan = Array.isArray(actionPlan.plan)
-    ? actionPlan.plan.filter(Boolean)
-    : Array.isArray(actionPlan.actions)
-      ? actionPlan.actions.filter(Boolean)
-      : Array.isArray(actionPlan.steps)
-        ? actionPlan.steps.filter(Boolean)
-        : [];
 
   return {
     action,
@@ -1125,12 +1085,9 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     .slice(0, 20);
 
   const fallback = buildRuleBasedActionPlan(transcript, elements);
-  const configuredApiKeys = normalizeApiKeys(
-    [options.apiKey, options.groqApiKey, process.env.GROQ_API_KEY]
-      .filter(Boolean)
-      .join(","),
-  );
-  const apiKey = configuredApiKeys[0] || "";
+  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
+    GROQ_API_KEY: options.apiKey,
+  });
   if (!apiKey) return fallback;
 
   const model =
@@ -1151,44 +1108,38 @@ export async function buildActionPlan(transcript, elements, options = {}) {
   const conversationContext = String(options.conversationContext || "").trim();
 
   try {
-    const response = await callChatCompletions({
-      apiKeys: configuredApiKeys,
-      baseUrl,
-      model,
-      systemPrompt: EXECUTION_ROUTING_SYSTEM_PROMPT,
-      userContent: JSON.stringify({
-        transcript,
-        elements: optimizedElements,
-        projectContext,
-        conversationContext:
-          buildConversationContextPrompt(conversationContext),
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: EXECUTION_ROUTING_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: JSON.stringify({
+              transcript,
+              elements: optimizedElements,
+              projectContext,
+              conversationContext:
+                buildConversationContextPrompt(conversationContext),
+            }),
+          },
+        ],
       }),
-      temperature: 0.1,
-      responseFormat: { type: "json_object" },
     });
 
+    if (!response.ok) throw new Error(`LLM request failed: ${response.status}`);
     const data = await response.json();
     const content = data?.choices?.[0]?.message?.content || "{}";
     const parsedActionPlan =
       typeof content === "string" ? JSON.parse(content) : content;
     const normalizedActionPlan = normalizeActionPlan(parsedActionPlan);
-    const hasUsefulPlan =
-      Boolean(normalizedActionPlan?.plan?.length) ||
-      (normalizedActionPlan?.action && normalizedActionPlan.action !== "NONE");
-
-    if (!hasUsefulPlan) {
-      const ttsContext = await generateTtsContext(
-        transcript,
-        fallback,
-        elements,
-        { apiKey, baseUrl, model, projectContext, conversationContext },
-      );
-      return {
-        ...fallback,
-        ttsContext,
-      };
-    }
-
     const ttsContext = await generateTtsContext(
       transcript,
       normalizedActionPlan,

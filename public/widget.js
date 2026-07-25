@@ -1455,7 +1455,10 @@
     scriptState.lastHandledActionAt = now;
 
     try {
-      if (actionPlan.action === "RESPOND") {
+      const queuedActions = normalizeQueuedActions(actionPlan);
+      const hasQueuedPlan = queuedActions.length > 0;
+
+      if (actionPlan?.action === "RESPOND" && !hasQueuedPlan) {
         const message = actionPlan.message || actionPlan.ttsContext || "";
         if (message) {
           setFeedback(message, actionPlan);
@@ -1469,7 +1472,7 @@
         return;
       }
 
-      if (!actionPlan || !actionPlan.action || actionPlan.action === "NONE") {
+      if (!hasQueuedPlan) {
         const message = actionPlan?.ttsContext || "No matching action.";
         setFeedback(message, actionPlan);
         await speakReply(message);
@@ -1477,7 +1480,7 @@
         return;
       }
 
-      if (actionPlan.action === "CLARIFY") {
+      if (actionPlan?.action === "CLARIFY" && !hasQueuedPlan) {
         scriptState.pendingClarify = actionPlan;
         const question =
           actionPlan.message ||
@@ -2177,16 +2180,8 @@
         }),
       });
       const data = await response.json().catch(() => ({}));
-      const hasUsefulPlan =
-        Boolean(data?.action && data.action !== "NONE") ||
-        Boolean(data?.plan?.length) ||
-        Boolean(data?.actions?.length) ||
-        Boolean(data?.steps?.length);
-      const actionPlan = hasUsefulPlan
-        ? data
-        : data?.action && data.action === "NONE"
-          ? domParser.buildExecutionPlan(transcript, elements)
-          : data?.action || domParser.buildExecutionPlan(transcript, elements);
+      const actionPlan =
+        data?.action || domParser.buildExecutionPlan(transcript, elements);
       console.log(
         "[voice-widget] intent execution pipeline data payload:",
         data,
