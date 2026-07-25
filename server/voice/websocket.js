@@ -242,6 +242,24 @@ export function setupVoiceWebSocket(server, config = {}) {
           return;
         }
 
+        if (payload.type === "transcript") {
+          const transcript = String(payload.text || "").trim();
+          if (!transcript || payload.isFinal === false) {
+            return;
+          }
+          payload = {
+            type: "intent",
+            transcript,
+            elements: payload.elements || [],
+            structured: payload.structured || [],
+            projectId: payload.projectId || "",
+          };
+          console.debug("[ws] converted transcript payload to intent", {
+            transcript,
+            projectId: payload.projectId,
+          });
+        }
+
         if (payload.type === "audio-control") {
           const state = String(payload.state || "").toLowerCase();
           const lifecycle = getSessionLifecycle(state, session);

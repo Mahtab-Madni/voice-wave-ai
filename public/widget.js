@@ -2254,11 +2254,22 @@
       scriptState.socket &&
       scriptState.socket.readyState === WebSocket.OPEN
     ) {
-      scriptState.socket.send(JSON.stringify(payload));
+      try {
+        scriptState.socket.send(JSON.stringify(payload));
+      } catch (error) {
+        console.warn("[voice-widget] failed to send socket payload", error);
+        return false;
+      }
       return true;
     }
-    scriptState.pendingAudioControlState =
-      payload.type === "audio-control" ? payload.state : null;
+    if (payload.type === "audio-control") {
+      scriptState.pendingAudioControlState = payload.state;
+    } else {
+      console.warn(
+        "[voice-widget] socket unavailable for payload, falling back if possible",
+        payload,
+      );
+    }
     return false;
   }
 
