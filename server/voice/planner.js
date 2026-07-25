@@ -437,6 +437,9 @@ async function generateTtsContext(
   const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
     GROQ_API_KEY: options.apiKey || options.groqApiKey,
   });
+  console.log(
+    `[planner][tts] groq key resolved: ${apiKey ? `${apiKey.slice(0, 6)}…` : "MISSING"}`,
+  );
   if (!apiKey) return fallback;
 
   const baseUrl =
@@ -1074,7 +1077,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     GROQ_API_KEY: options.apiKey || options.groqApiKey,
   });
   console.log(
-    `[planner] groq key resolved: ${apiKey ? `${apiKey.slice(0, 6)}…` : "MISSING"}`,
+    `[planner][plan] groq key resolved: ${apiKey ? `${apiKey.slice(0, 6)}…` : "MISSING"}`,
   );
   if (!apiKey) {
     throw new Error("GROQ API key is required for LLM planning");
@@ -1127,11 +1130,27 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       }),
     });
 
-    if (!response.ok) throw new Error(`LLM request failed: ${response.status}`);
-    const data = await response.json();
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        `LLM request failed: ${response.status} - ${responseText.slice(0, 512)}`,
+      );
+    }
+
+    const data = JSON.parse(responseText || "{}");
     const content = data?.choices?.[0]?.message?.content || "{}";
-    const parsedActionPlan =
-      typeof content === "string" ? JSON.parse(content) : content;
+    let parsedActionPlan;
+    try {
+      parsedActionPlan =
+        typeof content === "string" ? JSON.parse(content) : content;
+    } catch (parseError) {
+      throw new Error(
+        `Invalid JSON from LLM: ${parseError.message} - content: ${String(
+          content,
+        ).slice(0, 512)}`,
+      );
+    }
+
     const normalizedActionPlan = normalizeActionPlan(parsedActionPlan);
     const ttsContext = await generateTtsContext(
       transcript,

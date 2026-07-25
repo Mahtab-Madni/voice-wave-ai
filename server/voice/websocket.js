@@ -328,6 +328,34 @@ export function setupVoiceWebSocket(server, config = {}) {
         }
       } catch (error) {
         console.error(`[ws error] ${clientId}:`, error.message);
+        try {
+          socket.send(
+            JSON.stringify({
+              type: "action",
+              action: {
+                action: "RESPOND",
+                message:
+                  "I could not generate a plan right now. Please try again.",
+                ttsContext:
+                  "I could not generate a plan right now. Please try again.",
+                target: null,
+                value: null,
+                direction: null,
+                amount: null,
+                scrollRequired: false,
+                confidence: 0,
+                reasoning: "Planner failure",
+                clarifyOptions: null,
+                plan: [],
+              },
+            }),
+          );
+        } catch (sendError) {
+          console.error(
+            `[ws error] ${clientId}: failed to send fallback action payload`,
+            sendError.message,
+          );
+        }
       }
     });
 
