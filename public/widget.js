@@ -221,7 +221,12 @@
               const ths = thead.querySelectorAll("th");
               ths.forEach((th) =>
                 headers.push(
-                  this.truncateText(th.innerText || th.textContent || "", 80),
+                  this.handler?.truncateText
+                    ? this.handler.truncateText(
+                        th.innerText || th.textContent || "",
+                        80,
+                      )
+                    : String(th.innerText || th.textContent || "").slice(0, 80),
                 ),
               );
             } else {
@@ -230,7 +235,15 @@
                 const ths = firstRow.querySelectorAll("th,td");
                 ths.forEach((th) =>
                   headers.push(
-                    this.truncateText(th.innerText || th.textContent || "", 80),
+                    this.handler?.truncateText
+                      ? this.handler.truncateText(
+                          th.innerText || th.textContent || "",
+                          80,
+                        )
+                      : String(th.innerText || th.textContent || "").slice(
+                          0,
+                          80,
+                        ),
                   ),
                 );
               }
@@ -302,10 +315,15 @@
             trs.forEach((tr, idx) => {
               const cells = Array.from(tr.querySelectorAll("td,th")).map(
                 (cell) => {
-                  const txt = this.truncateText(
-                    cell.innerText || cell.textContent || "",
-                    140,
-                  );
+                  const txt = this.handler?.truncateText
+                    ? this.handler.truncateText(
+                        cell.innerText || cell.textContent || "",
+                        140,
+                      )
+                    : String(cell.innerText || cell.textContent || "").slice(
+                        0,
+                        140,
+                      );
                   const parsed = parseNumericValue(txt);
                   return { text: txt, parsed };
                 },
@@ -344,10 +362,15 @@
               );
               const items = sampleChildren.map((child, i) => ({
                 index: i,
-                text: this.truncateText(
-                  child.innerText || child.textContent || "",
-                  220,
-                ),
+                text: this.handler?.truncateText
+                  ? this.handler.truncateText(
+                      child.innerText || child.textContent || "",
+                      220,
+                    )
+                  : String(child.innerText || child.textContent || "").slice(
+                      0,
+                      220,
+                    ),
                 selector: this.buildUniqueSelector(child),
               }));
               structured.grids.push({
@@ -2539,6 +2562,16 @@
       recognition.onerror = (event) => {
         console.warn("[voice-widget] recognition error", event.error);
         setStatus(`Recognition error: ${event.error}`);
+        if (
+          event.error === "aborted" &&
+          scriptState.sessionActive &&
+          !scriptState.userInitiatedStop
+        ) {
+          console.debug(
+            "[voice-widget] recognition aborted during restart; ignoring fallback",
+          );
+          return;
+        }
         if (
           scriptState.listening &&
           scriptState.transcriptionMode === "browser" &&
