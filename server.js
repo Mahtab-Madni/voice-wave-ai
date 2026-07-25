@@ -9,6 +9,7 @@ import authRoutes from "./server/routes/authRoutes.js";
 import projectRoutes from "./server/routes/projectRoutes.js";
 import voiceRoutes from "./server/voice/routes.js";
 import statsRoutes from "./server/routes/statsRoutes.js";
+import metricsRoutes from "./server/routes/metricesRoutes.js";
 import { setupVoiceWebSocket } from "./server/voice/websocket.js";
 
 dotenv.config();
@@ -47,6 +48,7 @@ app.use("/api", authRoutes);
 app.use("/api", projectRoutes);
 app.use("/api", statsRoutes);
 app.use("/api", voiceRoutes);
+app.use("/api", metricsRoutes);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "voice-accessibility-wave" });

@@ -23,7 +23,7 @@ const projectSchema = new mongoose.Schema(
       voiceSessions: { type: Number, default: 0 },
       avgConfidence: { type: Number, default: 0 },
       executionSuccess: { type: Number, default: 0 },
-      groqCalls: { type: Number, default: 0 },
+      LLMCalls: { type: Number, default: 0 },
     },
     isConnected: { type: Boolean, default: false },
   },
