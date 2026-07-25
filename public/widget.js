@@ -1038,31 +1038,6 @@
       finalizePlayback();
     };
 
-    const canUseLocalSpeech =
-      typeof window !== "undefined" &&
-      typeof window.speechSynthesis !== "undefined" &&
-      typeof window.SpeechSynthesisUtterance === "function" &&
-      message.length <= 90;
-
-    if (canUseLocalSpeech) {
-      try {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(message);
-        utterance.lang = "en-US";
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-
-        await new Promise((resolve) => {
-          utterance.onend = () => resolve();
-          utterance.onerror = () => resolve();
-          window.speechSynthesis.speak(utterance);
-        });
-        return;
-      } catch (error) {
-        console.warn("[voice-widget] local speech synthesis failed", error);
-      }
-    }
-
     try {
       const response = await fetch(`${getApiBaseUrl()}/api/tts`, {
         method: "POST",
