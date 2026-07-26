@@ -1,3 +1,5 @@
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export function createCorsOptions(env = process.env) {
   const allowedOrigins = [
     env.FRONTEND_URL,
@@ -5,6 +7,7 @@ export function createCorsOptions(env = process.env) {
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://voice-wave-xi.vercel.app",
+    "https://*.vercel.app",
   ]
     .filter(Boolean)
     .flatMap((value) => value.split(",").map((entry) => entry.trim()))
@@ -19,7 +22,18 @@ export function createCorsOptions(env = process.env) {
         return;
       }
 
-      if (allowAllOrigins || allowedOrigins.includes(origin)) {
+      if (
+        allowAllOrigins ||
+        allowedOrigins.some((entry) => {
+          if (entry === origin) return true;
+          if (!entry.includes("*")) return false;
+
+          const pattern = new RegExp(
+            `^${escapeRegExp(entry).replace(/\\\*/g, ".+")}$`,
+          );
+          return pattern.test(origin);
+        })
+      ) {
         callback(null, true);
         return;
       }

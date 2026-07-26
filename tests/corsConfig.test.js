@@ -11,6 +11,21 @@ test("allows arbitrary origins when allow-all is enabled", () => {
   });
 });
 
+test("allows Vercel deployment subdomains when wildcard is configured", () => {
+  const corsOptions = createCorsOptions({
+    ALLOW_ALL_ORIGINS: "false",
+    CORS_ALLOWED_ORIGINS: "https://voice-wave-xi.vercel.app",
+  });
+
+  corsOptions.origin(
+    "https://voice-widget-snippet-2db01fm70-mahtab-madnis-projects.vercel.app",
+    (error, allowed) => {
+      assert.equal(error, null);
+      assert.equal(allowed, true);
+    },
+  );
+});
+
 test("blocks unknown origins when allow-all is disabled", () => {
   const corsOptions = createCorsOptions({
     ALLOW_ALL_ORIGINS: "false",
