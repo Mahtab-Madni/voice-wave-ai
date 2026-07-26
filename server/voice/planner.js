@@ -1,5 +1,3 @@
-import { resolveRotatedApiKey } from "../../apiKeyRotator.js";
-
 const EXECUTION_ROUTING_SYSTEM_PROMPT = `You are the execution routing brain of an AI-powered web automation assistant. Your task is to match a natural-language command to the best interactive element or system action on the screen and produce an ordered execution plan.
 
 Rules:
@@ -121,8 +119,50 @@ function normalizeText(value) {
     .trim();
 }
 
-function getRotatedApiKeyFromEnv(envVarName, options = {}) {
-  return resolveRotatedApiKey(envVarName, options, globalThis);
+function resolveGroqApiKey(options = {}, role = "planning") {
+  const explicitCandidates = [];
+
+  if (role === "tts") {
+    explicitCandidates.push(
+      options.ttsApiKey,
+      options.groqTtsApiKey,
+      options.ttsGroqApiKey,
+      options.groqApiKey,
+    );
+  } else {
+    explicitCandidates.push(
+      options.planningApiKey,
+      options.groqPlanningApiKey,
+      options.automationApiKey,
+      options.groqApiKey,
+      options.apiKey,
+    );
+  }
+
+  const explicitValue = explicitCandidates.find((value) => {
+    const normalized = String(value || "").trim();
+    return normalized.length > 0;
+  });
+
+  if (explicitValue) {
+    return (
+      String(explicitValue)
+        .split(",")
+        .map((entry) => entry.trim())
+        .find(Boolean) || ""
+    );
+  }
+
+  const envVarName =
+    role === "tts" ? "GROQ_TTS_API_KEY" : "GROQ_AUTOMATION_API_KEY";
+  const envValue = process.env[envVarName] || process.env.GROQ_API_KEY || "";
+
+  return (
+    String(envValue)
+      .split(",")
+      .map((entry) => entry.trim())
+      .find(Boolean) || ""
+  );
 }
 
 function getCommandKeywords(transcript) {
@@ -481,9 +521,7 @@ async function generateTtsContext(
   options = {},
 ) {
   const fallback = buildFallbackTtsContext(transcript, actionPlan, elements);
-  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
-    GROQ_API_KEY: options.apiKey || options.groqApiKey,
-  });
+  const apiKey = resolveGroqApiKey(options, "tts");
   console.log(
     `[planner][tts] groq key resolved: ${apiKey ? `${apiKey.slice(0, 6)}…` : "MISSING"}`,
   );
@@ -670,7 +708,7 @@ function scoreElementRelevance(
   return { score, reason };
 }
 
-export function buildRuleBasedActionPlan(transcript, elements , options = {}) {
+export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
   const normalizedTranscript = normalizeText(transcript);
   if (!normalizedTranscript) {
     return {
@@ -700,7 +738,7 @@ export function buildRuleBasedActionPlan(transcript, elements , options = {}) {
       reasoning: "Used project context for an informational response.",
     };
   }
-  
+
   if (/go back|previous page|back page|back/i.test(normalizedTranscript)) {
     return {
       action: "GO_BACK",
@@ -1119,6 +1157,19 @@ export function normalizeActionPlan(actionPlan) {
   };
 }
 
+function isTransientLlmFailure(error) {
+  const message = String(error?.message || "");
+  return /429|rate[_\s-]?limit|too many requests|timed out|timeout|fetch failed|ECONNRESET|ECONNREFUSED|ENOTFOUND|service unavailable|503|502|504|econn/i.test(
+    message,
+  );
+}
+
+function buildFallbackActionPlan(transcript, elements, options = {}) {
+  return normalizeActionPlan(
+    buildRuleBasedActionPlan(transcript, elements, options),
+  );
+}
+
 export async function buildActionPlan(transcript, elements, options = {}) {
   const normalizedTranscript = normalizeText(transcript);
   const commandKeywords = getCommandKeywords(normalizedTranscript);
@@ -1143,9 +1194,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     .map(({ relevanceScore, ...el }) => el)
     .slice(0, 20);
 
-  const apiKey = getRotatedApiKeyFromEnv("GROQ_API_KEY", {
-    GROQ_API_KEY: options.apiKey || options.groqApiKey,
-  });
+  const apiKey = resolveGroqApiKey(options, "planning");
   console.log(
     `[planner][plan] groq key resolved: ${apiKey ? `${apiKey.slice(0, 6)}…` : "MISSING"}`,
   );
@@ -1171,6 +1220,14 @@ export async function buildActionPlan(transcript, elements, options = {}) {
     options.projectConfig || options.projectContext || options.context || {},
   );
   const conversationContext = String(options.conversationContext || "").trim();
+  const llmOptions = {
+    ...options,
+    apiKey,
+    baseUrl,
+    model,
+    projectContext,
+    conversationContext,
+  };
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -1202,9 +1259,31 @@ export async function buildActionPlan(transcript, elements, options = {}) {
 
     const responseText = await response.text();
     if (!response.ok) {
-      throw new Error(
-        `LLM request failed: ${response.status} - ${responseText.slice(0, 512)}`,
-      );
+      const errorMessage = `LLM request failed: ${response.status} - ${responseText.slice(0, 512)}`;
+      if (
+        response.status === 429 ||
+        /rate_limit_exceeded|rate[_\s-]?limit|too many requests/i.test(
+          responseText,
+        )
+      ) {
+        const fallbackPlan = buildFallbackActionPlan(
+          transcript,
+          elements,
+          options,
+        );
+        const ttsContext = await generateTtsContext(
+          transcript,
+          fallbackPlan,
+          elements,
+          llmOptions,
+        );
+        console.warn(
+          "[planner][plan] falling back to deterministic planning after LLM throttling:",
+          errorMessage,
+        );
+        return { ...fallbackPlan, ttsContext };
+      }
+      throw new Error(errorMessage);
     }
 
     const data = JSON.parse(responseText || "{}");
@@ -1215,11 +1294,22 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       parsedActionPlan =
         typeof content === "string" ? JSON.parse(content) : content;
     } catch (parseError) {
-      throw new Error(
-        `Invalid JSON from LLM: ${parseError.message} - content: ${String(
-          content,
-        ).slice(0, 512)}`,
+      const fallbackPlan = buildFallbackActionPlan(
+        transcript,
+        elements,
+        options,
       );
+      const ttsContext = await generateTtsContext(
+        transcript,
+        fallbackPlan,
+        elements,
+        llmOptions,
+      );
+      console.warn(
+        "[planner][plan] falling back to deterministic planning after invalid LLM output:",
+        parseError.message,
+      );
+      return { ...fallbackPlan, ttsContext };
     }
 
     console.log(
@@ -1235,13 +1325,36 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       transcript,
       normalizedActionPlan,
       elements,
-      { apiKey, baseUrl, model, projectContext, conversationContext },
+      llmOptions,
     );
     return {
       ...normalizedActionPlan,
       ttsContext,
     };
   } catch (error) {
+    if (error?.message?.includes("GROQ API key is required")) {
+      throw error;
+    }
+
+    if (isTransientLlmFailure(error)) {
+      const fallbackPlan = buildFallbackActionPlan(
+        transcript,
+        elements,
+        options,
+      );
+      const ttsContext = await generateTtsContext(
+        transcript,
+        fallbackPlan,
+        elements,
+        llmOptions,
+      );
+      console.warn(
+        "[planner][plan] falling back to deterministic planning after LLM failure:",
+        error.message,
+      );
+      return { ...fallbackPlan, ttsContext };
+    }
+
     console.error("[llm] planning failed:", error.message);
     throw error;
   }
