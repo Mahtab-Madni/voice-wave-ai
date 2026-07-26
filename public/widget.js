@@ -1210,6 +1210,43 @@
     }
   }
 
+  function findSectionTarget(sectionLabel) {
+    const normalizedLabel = String(sectionLabel || "")
+      .trim()
+      .toLowerCase();
+
+    if (!normalizedLabel) return null;
+
+    const idCandidate = `#${normalizedLabel.replace(/\s+/g, "-")}`;
+    if (document.querySelector(idCandidate)) {
+      return document.querySelector(idCandidate);
+    }
+
+    const sectionCandidates = document.querySelectorAll(
+      'section, article, div, main, aside, [role="region"]',
+    );
+
+    for (const element of sectionCandidates) {
+      const text = getVisibleTextFromElement(element).toLowerCase();
+      if (text.includes(normalizedLabel)) {
+        return element;
+      }
+    }
+
+    const headingCandidates = document.querySelectorAll(
+      'h1, h2, h3, h4, h5, h6, [role="heading"]',
+    );
+
+    for (const element of headingCandidates) {
+      const text = getVisibleTextFromElement(element).toLowerCase();
+      if (text.includes(normalizedLabel)) {
+        return element;
+      }
+    }
+
+    return null;
+  }
+
   function getActionTargetLabel(actionPlan) {
     const targetElement = actionPlan?.target
       ? document.querySelector(actionPlan.target)
@@ -1345,7 +1382,19 @@
     const targetLabel = getActionTargetLabel(actionPlan);
 
     if (actionPlan.action === "SCROLL") {
-      const direction = actionPlan.direction === "up" ? "up" : "down";
+      if (actionPlan.value === "end") {
+        return "Scrolling to the end of the page...";
+      }
+
+      if (actionPlan.value === "beginning") {
+        return "Scrolling to the beginning of the page...";
+      }
+
+      if (typeof actionPlan.value === "string" && actionPlan.value.trim()) {
+        return `Scrolling to the ${actionPlan.value} section...`;
+      }
+
+      const direction = actionPlan.direction || "down";
       const distance = actionPlan.amount || 600;
       return `Scrolling ${direction}${distance <= 400 ? " a bit" : ""}...`;
     }
@@ -1842,11 +1891,42 @@
     }
 
     if (actionPlan.action === "SCROLL") {
-      const direction = actionPlan.direction === "up" ? -1 : 1;
-      window.scrollBy({
-        top: direction * (actionPlan.amount || 600),
-        behavior: "smooth",
-      });
+      const target = actionPlan.value;
+
+      if (target === "end") {
+        window.scrollTo({
+          top: document.body.scrollHeight,
+          left: 0,
+          behavior: "smooth",
+        });
+        return;
+      }
+
+      if (target === "beginning") {
+        window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        return;
+      }
+
+      if (typeof target === "string" && target.trim()) {
+        const sectionElement = findSectionTarget(target);
+        if (sectionElement) {
+          sectionElement.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+      }
+
+      const direction = actionPlan.direction || "down";
+      const amount = actionPlan.amount || 600;
+
+      if (direction === "left") {
+        window.scrollBy({ left: -amount, behavior: "smooth" });
+      } else if (direction === "right") {
+        window.scrollBy({ left: amount, behavior: "smooth" });
+      } else if (direction === "up") {
+        window.scrollBy({ top: -amount, behavior: "smooth" });
+      } else {
+        window.scrollBy({ top: amount, behavior: "smooth" });
+      }
       return;
     }
 

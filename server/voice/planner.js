@@ -29,7 +29,7 @@ Rules:
   - SELECT_OPTION: Set target to dropdown/select element selector, value to the option name/value.
   - HOVER / FOCUS / HIGHLIGHT_ELEMENT: Set target to element selector.
   - READ_TEXT: Set target to the specific element containing text to read, or null for general reading.
-  - SCROLL: Set target to null (or specific scrollable container), direction to "up" or "down", amount to scroll distance in pixels (for example, 400 or 600).
+  - SCROLL: Set target to null (or specific scrollable container), direction to "up", "down", "left", or "right", amount to scroll distance in pixels (for example, 400 or 600). If the user says "scroll to" or "go to" a named section such as "resources" or "pricing", emit a SCROLL action with the section name in the value field.
   - ZOOM: Set target to null, direction to "in", "out", or "reset", amount to scale factor (for example, 1.25 for in, 0.8 for out, 1.0 for reset).
   - PRESS_KEY: Set target to focused element selector or null, value to key name (for example, "Enter", "Escape", "Tab").
   - NAVIGATE: Set target to null, value to target URL or path.
@@ -49,6 +49,7 @@ Rules:
 7. Overlay & Modal Considerations:
   - If the requested interaction may be blocked by overlays, modals, or dialogs, set scrollRequired appropriately and include an explanatory message so the client can attempt safe dismissal (the front-end will call its dismissal helper before executing actions).
   - Do not attempt to click hidden or offscreen elements without indicating scrollRequired: true.
+  - When the user asks to move to a named page region such as a section, FAQ, pricing block, or resources area, prefer a SCROLL action over a click unless the text clearly indicates a navigation link.
 
 8. Safety & Ordering Rule:
   - Prefer safe, sequential execution. Do not assume a later step can happen before an earlier one completes.
@@ -93,7 +94,7 @@ const EXECUTION_ROUTING_SYNONYMS = {
   login: ["login", "log in", "sign in", "access account"],
   search: ["search", "find", "look for", "explore"],
   help: ["help", "support", "assistance", "contact us"],
-  scroll: ["scroll", "move", "down", "up", "top", "bottom"],
+  scroll: ["scroll", "move", "down", "up", "left", "right", "top", "bottom"],
   zoom: ["zoom", "magnify", "scale", "enlarge", "shrink"],
   navigate: ["navigate", "go to", "open the", "visit"],
   back: ["go back", "previous page", "back page", "back"],
@@ -212,6 +213,46 @@ function extractProductHint(transcript) {
 
 function getScrollAmount(transcript) {
   return /a bit|little|small/i.test(transcript) ? 400 : 600;
+}
+
+function getScrollDirection(transcript) {
+  const normalizedTranscript = normalizeText(transcript);
+  if (/left|west/i.test(normalizedTranscript)) return "left";
+  if (/right|east/i.test(normalizedTranscript)) return "right";
+  if (/down|bottom|forward/i.test(normalizedTranscript)) return "down";
+  return "up";
+}
+
+function getScrollTarget(transcript) {
+  const normalizedTranscript = normalizeText(transcript);
+
+  if (
+    /scroll to the (end|bottom)|go to the (end|bottom)|bottom of the page/i.test(
+      normalizedTranscript,
+    )
+  ) {
+    return "end";
+  }
+
+  if (
+    /scroll to the (beginning|top)|go to the (beginning|top)|top of the page/i.test(
+      normalizedTranscript,
+    )
+  ) {
+    return "beginning";
+  }
+
+  const sectionMatch = normalizedTranscript.match(
+    /scroll to (?:the )?([a-z0-9\s-]+)/i,
+  );
+  if (sectionMatch?.[1]) {
+    const sectionLabel = sectionMatch[1].trim();
+    if (sectionLabel && sectionLabel !== "the") {
+      return sectionLabel;
+    }
+  }
+
+  return null;
 }
 
 function extractNavigationTarget(transcript) {
@@ -352,10 +393,10 @@ function extractFallbackNavigationIntent(transcript) {
     return { action: "GO_FORWARD" };
   }
 
-  if (/scroll (down|up)|scroll/i.test(normalizedTranscript)) {
+  if (/scroll (down|up|left|right)|scroll/i.test(normalizedTranscript)) {
     return {
       action: "SCROLL",
-      direction: /down/.test(normalizedTranscript) ? "down" : "up",
+      direction: getScrollDirection(normalizedTranscript),
     };
   }
 
@@ -467,7 +508,19 @@ function buildFallbackTtsContext(transcript, actionPlan, elements = []) {
   }
 
   if (action === "SCROLL") {
-    const direction = actionPlan?.direction === "up" ? "up" : "down";
+    if (actionPlan?.value === "end") {
+      return "Scrolling to the end of the page.";
+    }
+
+    if (actionPlan?.value === "beginning") {
+      return "Scrolling to the beginning of the page.";
+    }
+
+    if (typeof actionPlan?.value === "string" && actionPlan.value.trim()) {
+      return `Scrolling to the ${actionPlan.value} section.`;
+    }
+
+    const direction = actionPlan?.direction || "down";
     return `Scrolling ${direction} on the page.`;
   }
 
@@ -865,20 +918,20 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
     };
   }
 
-  if (/scroll|move|down|up|top|bottom/i.test(normalizedTranscript)) {
-    const direction = /down|bottom/i.test(normalizedTranscript)
-      ? "down"
-      : /up|top/i.test(normalizedTranscript)
-        ? "up"
-        : "down";
+  if (/scroll|move|down|up|left|right|top|bottom/i.test(normalizedTranscript)) {
+    const target = getScrollTarget(normalizedTranscript);
+    const direction = getScrollDirection(normalizedTranscript);
     const amount = getScrollAmount(normalizedTranscript);
     return {
       action: "SCROLL",
-      direction,
-      amount,
+      direction: target ? null : direction,
+      amount: target ? null : amount,
+      value: target,
       scrollRequired: false,
       confidence: 0.95,
-      reasoning: "Matched global viewport scroll command.",
+      reasoning: target
+        ? "Matched boundary scroll command."
+        : "Matched global viewport scroll command.",
     };
   }
 

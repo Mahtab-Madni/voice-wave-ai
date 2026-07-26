@@ -67,6 +67,85 @@ test("buildActionPlan falls back to rule-based planning when the LLM is rate lim
   }
 });
 
+test("buildActionPlan recognizes left and right scroll intents", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    text: async () =>
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                action: "SCROLL",
+                direction: "right",
+                amount: 400,
+              }),
+            },
+          },
+        ],
+      }),
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            content: "ok",
+          },
+        },
+      ],
+    }),
+  });
+
+  try {
+    const plan = await buildActionPlan("scroll right a bit", [], {
+      groqApiKey: "test-key",
+    });
+
+    assert.equal(plan.action, "SCROLL");
+    assert.equal(plan.direction, "right");
+    assert.equal(plan.amount, 400);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("buildActionPlan recognizes scroll to the end and beginning intents", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    text: async () =>
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ action: "SCROLL", value: "end" }),
+            },
+          },
+        ],
+      }),
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            content: "ok",
+          },
+        },
+      ],
+    }),
+  });
+
+  try {
+    const plan = await buildActionPlan("scroll to the end", [], {
+      groqApiKey: "test-key",
+    });
+
+    assert.equal(plan.action, "SCROLL");
+    assert.equal(plan.value, "end");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("buildActionPlan uses separate planning and TTS Groq keys", async () => {
   const originalFetch = global.fetch;
   const authHeaders = [];
