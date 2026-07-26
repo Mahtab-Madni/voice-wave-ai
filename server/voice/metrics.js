@@ -6,6 +6,7 @@ function normalizeMetrics(metrics = {}) {
     avgConfidence: Number(safeMetrics.avgConfidence || 0),
     executionSuccess: Number(safeMetrics.executionSuccess || 0),
     LLMCalls: Number(safeMetrics.LLMCalls || 0),
+    actionResults: Number(safeMetrics.actionResults || 0),
   };
 }
 
@@ -46,33 +47,26 @@ export function applyMetricsEvent(existingMetrics = {}, event = {}) {
     const confidence = Number(event?.confidence ?? 0);
     const success = Boolean(event?.success);
 
-    const previousSessions = metrics.voiceSessions || 0;
+    const previousActionResults = metrics.actionResults || 0;
     const previousAvgConfidence = metrics.avgConfidence || 0;
     const previousSuccess = metrics.executionSuccess || 0;
 
-    const nextCount = previousSessions > 0 ? previousSessions : 1;
-    const nextAvgConfidence =
-      previousSessions > 0
-        ? Number(
-            (
-              (previousAvgConfidence * previousSessions + confidence * 100) /
-              nextCount
-            ).toFixed(1),
-          )
-        : Number((confidence * 100).toFixed(1));
+    const nextCount = previousActionResults + 1;
+    const nextAvgConfidence = Number(
+      (
+        (previousAvgConfidence * previousActionResults + confidence * 100) /
+        nextCount
+      ).toFixed(1),
+    );
 
-    const nextExecutionSuccess =
-      previousSessions > 0
-        ? Number(
-            (
-              (previousSuccess * previousSessions + (success ? 100 : 0)) /
-              nextCount
-            ).toFixed(1),
-          )
-        : success
-          ? 100
-          : 0;
+    const nextExecutionSuccess = Number(
+      (
+        (previousSuccess * previousActionResults + (success ? 100 : 0)) /
+        nextCount
+      ).toFixed(1),
+    );
 
+    metrics.actionResults = nextCount;
     metrics.avgConfidence = nextAvgConfidence;
     metrics.executionSuccess = nextExecutionSuccess;
   }

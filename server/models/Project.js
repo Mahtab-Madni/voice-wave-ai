@@ -24,6 +24,7 @@ const projectSchema = new mongoose.Schema(
       avgConfidence: { type: Number, default: 0 },
       executionSuccess: { type: Number, default: 0 },
       LLMCalls: { type: Number, default: 0 },
+      actionResults: { type: Number, default: 0 },
     },
     isConnected: { type: Boolean, default: false },
   },

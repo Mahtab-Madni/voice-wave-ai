@@ -22,6 +22,17 @@ test("applyMetricsEvent increments counters and rolls averages", () => {
 
   assert.equal(metrics.avgConfidence, 88);
   assert.equal(metrics.executionSuccess, 100);
+  assert.equal(metrics.actionResults, 1);
+
+  metrics = applyMetricsEvent(metrics, {
+    type: "action_result",
+    confidence: 0.72,
+    success: false,
+  });
+
+  assert.equal(metrics.avgConfidence, 80);
+  assert.equal(metrics.executionSuccess, 50);
+  assert.equal(metrics.actionResults, 2);
 });
 
 test("getSessionLifecycle only starts a new session on start and ends on stop", () => {
