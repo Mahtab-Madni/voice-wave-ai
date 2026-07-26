@@ -162,6 +162,80 @@ function resolveGroqApiKey(options = {}, role = "planning") {
   return resolveRotatedApiKey(envVarName, {}, globalThis);
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function fetchWithRetryAndRotation({
+  role = "planning",
+  options = {},
+  url,
+  requestInit = {},
+  fetchImpl = fetch,
+  maxRetries = 2,
+  baseDelayMs = 1000,
+}) {
+  if (!url) throw new Error("A request URL is required.");
+
+  let lastError = null;
+  const maxAttempts = maxRetries + 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const apiKey = resolveGroqApiKey(options, role);
+
+    try {
+      const response = await fetchImpl(url, {
+        ...requestInit,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          ...(requestInit.headers || {}),
+        },
+      });
+
+      const responseText = await response.text();
+
+      if (
+        !response.ok &&
+        isTransientLlmFailure(
+          new Error(`${response.status} - ${responseText.slice(0, 512)}`),
+        )
+      ) {
+        if (attempt < maxRetries) {
+          const retryDelayMs = baseDelayMs * (attempt + 1);
+          console.warn(
+            `[planner][${role}] transient failure, retrying in ${retryDelayMs}ms`,
+            responseText.slice(0, 256),
+          );
+          await delay(retryDelayMs);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status} - ${responseText.slice(0, 512)}`,
+        );
+      }
+
+      return { response, responseText, apiKey };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxRetries || !isTransientLlmFailure(error)) {
+        break;
+      }
+
+      const retryDelayMs = baseDelayMs * (attempt + 1);
+      console.warn(
+        `[planner][${role}] transient failure, retrying in ${retryDelayMs}ms`,
+        error.message,
+      );
+      await delay(retryDelayMs);
+    }
+  }
+
+  throw lastError || new Error("Request failed after retries.");
+}
+
 function getCommandKeywords(transcript) {
   const tokens = normalizeText(transcript).split(/\s+/);
   const stopWords = new Set([
@@ -632,46 +706,51 @@ async function generateTtsContext(
 “I’m adding the iPhone to your cart.”
 “Navigating to the requested page.”`;
 
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
+    const responseInfo = await fetchWithRetryAndRotation({
+      role: "tts",
+      options,
+      url: `${baseUrl}/chat/completions`,
+      requestInit: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.2,
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt,
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                transcript,
+                action: actionPlan?.action || "CLICK",
+                target: actionPlan?.target || null,
+                targetText: actionPlan?.reasoning || null,
+                conversationContext: buildConversationContextPrompt(
+                  options.conversationContext || "",
+                ),
+                projectContext: buildProjectContext(
+                  options.projectConfig ||
+                    options.projectContext ||
+                    options.context ||
+                    {},
+                ),
+              }),
+            },
+          ],
+        }),
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content: systemPrompt,
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              transcript,
-              action: actionPlan?.action || "CLICK",
-              target: actionPlan?.target || null,
-              targetText: actionPlan?.reasoning || null,
-              conversationContext: buildConversationContextPrompt(
-                options.conversationContext || "",
-              ),
-              projectContext: buildProjectContext(
-                options.projectConfig ||
-                  options.projectContext ||
-                  options.context ||
-                  {},
-              ),
-            }),
-          },
-        ],
-      }),
+      fetchImpl: fetch,
+      maxRetries: 2,
+      baseDelayMs: 1000,
     });
 
-    if (!response.ok)
-      throw new Error(`TTS context generation failed: ${response.status}`);
-    const data = await response.json();
+    const data = JSON.parse(responseInfo.responseText || "{}");
     const generated = String(data?.choices?.[0]?.message?.content || "").trim();
     return generated || fallback;
   } catch (error) {
@@ -1328,62 +1407,41 @@ export async function buildActionPlan(transcript, elements, options = {}) {
   };
 
   try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
+    const responseInfo = await fetchWithRetryAndRotation({
+      role: "planning",
+      options: llmOptions,
+      url: `${baseUrl}/chat/completions`,
+      requestInit: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.1,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: EXECUTION_ROUTING_SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: JSON.stringify({
+                transcript,
+                elements: optimizedElements,
+                projectContext,
+                conversationContext:
+                  buildConversationContextPrompt(conversationContext),
+              }),
+            },
+          ],
+        }),
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: EXECUTION_ROUTING_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: JSON.stringify({
-              transcript,
-              elements: optimizedElements,
-              projectContext,
-              conversationContext:
-                buildConversationContextPrompt(conversationContext),
-            }),
-          },
-        ],
-      }),
+      fetchImpl: fetch,
+      maxRetries: 2,
+      baseDelayMs: 1000,
     });
 
-    const responseText = await response.text();
-    if (!response.ok) {
-      const errorMessage = `LLM request failed: ${response.status} - ${responseText.slice(0, 512)}`;
-      if (
-        response.status === 429 ||
-        /rate_limit_exceeded|rate[_\s-]?limit|too many requests/i.test(
-          responseText,
-        )
-      ) {
-        const fallbackPlan = buildFallbackActionPlan(
-          transcript,
-          elements,
-          options,
-        );
-        const ttsContext = await generateTtsContext(
-          transcript,
-          fallbackPlan,
-          elements,
-          llmOptions,
-        );
-        console.warn(
-          "[planner][plan] falling back to deterministic planning after LLM throttling:",
-          errorMessage,
-        );
-        return { ...fallbackPlan, ttsContext };
-      }
-      throw new Error(errorMessage);
-    }
-
+    const responseText = responseInfo.responseText;
     const data = JSON.parse(responseText || "{}");
     const content = data?.choices?.[0]?.message?.content || "{}";
     console.log("[planner][raw] LLM content:", String(content).slice(0, 1024));
