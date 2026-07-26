@@ -1,3 +1,5 @@
+import { resolveRotatedApiKey } from "../../apiKeyRotator.js";
+
 const EXECUTION_ROUTING_SYSTEM_PROMPT = `You are the execution routing brain of an AI-powered web automation assistant. Your task is to match a natural-language command to the best interactive element or system action on the screen and produce an ordered execution plan.
 
 Rules:
@@ -120,6 +122,8 @@ function normalizeText(value) {
 }
 
 function resolveGroqApiKey(options = {}, role = "planning") {
+  const envVarName =
+    role === "tts" ? "GROQ_TTS_API_KEY" : "GROQ_AUTOMATION_API_KEY";
   const explicitCandidates = [];
 
   if (role === "tts") {
@@ -145,24 +149,16 @@ function resolveGroqApiKey(options = {}, role = "planning") {
   });
 
   if (explicitValue) {
-    return (
-      String(explicitValue)
-        .split(",")
-        .map((entry) => entry.trim())
-        .find(Boolean) || ""
+    return resolveRotatedApiKey(
+      envVarName,
+      {
+        [envVarName]: String(explicitValue),
+      },
+      globalThis,
     );
   }
 
-  const envVarName =
-    role === "tts" ? "GROQ_TTS_API_KEY" : "GROQ_AUTOMATION_API_KEY";
-  const envValue = process.env[envVarName] || process.env.GROQ_API_KEY || "";
-
-  return (
-    String(envValue)
-      .split(",")
-      .map((entry) => entry.trim())
-      .find(Boolean) || ""
-  );
+  return resolveRotatedApiKey(envVarName, {}, globalThis);
 }
 
 function getCommandKeywords(transcript) {
@@ -330,6 +326,40 @@ function extractProductPhrase(transcript) {
     /\b([a-z0-9]+(?:\s+[a-z0-9]+)*)\b/i,
   );
   return simpleProductMatch?.[1] ? normalizeText(simpleProductMatch[1]) : null;
+}
+
+function extractFallbackNavigationIntent(transcript) {
+  const normalizedTranscript = normalizeText(transcript || "");
+  if (!normalizedTranscript) return null;
+
+  if (/go to home|home page|homepage|go home/i.test(normalizedTranscript)) {
+    return { action: "CLICK", target: "home" };
+  }
+
+  if (
+    /go to (the )?(about|contact|pricing|login|signup|dashboard)/i.test(
+      normalizedTranscript,
+    )
+  ) {
+    return { action: "NAVIGATE", value: "/about" };
+  }
+
+  if (/go back|back page|previous page/i.test(normalizedTranscript)) {
+    return { action: "GO_BACK" };
+  }
+
+  if (/go forward|next page/i.test(normalizedTranscript)) {
+    return { action: "GO_FORWARD" };
+  }
+
+  if (/scroll (down|up)|scroll/i.test(normalizedTranscript)) {
+    return {
+      action: "SCROLL",
+      direction: /down/.test(normalizedTranscript) ? "down" : "up",
+    };
+  }
+
+  return null;
 }
 
 function buildProjectContext(projectConfig = {}) {
@@ -716,6 +746,21 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
       target: null,
       confidence: 0,
       reasoning: "No transcript available.",
+    };
+  }
+
+  const navigationIntent =
+    extractFallbackNavigationIntent(normalizedTranscript);
+  if (navigationIntent) {
+    return {
+      action: navigationIntent.action,
+      target: navigationIntent.target || null,
+      value: navigationIntent.value || null,
+      direction: navigationIntent.direction || null,
+      amount: navigationIntent.amount || null,
+      scrollRequired: false,
+      confidence: 0.9,
+      reasoning: "Matched navigation fallback intent.",
     };
   }
 
