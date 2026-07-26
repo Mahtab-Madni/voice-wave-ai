@@ -29,16 +29,16 @@ In practice, this means the system can help with tasks such as:
 - summarizing page content
 - and much more through a unified voice interface
 
-## Recently added capabilities
+## Recently Added Capabilities
 
-The latest version adds several reliability, latency, and intelligence upgrades:
+Voice-wave is now operating as a more resilient and intelligent voice automation platform. The core experience is fully implemented end-to-end, and the latest work focuses on reliability, smarter planning, and better fallback behavior.
 
-- Round-robin API key rotation for speech, LLM planning, and TTS using comma-separated values in the environment.
-- Session-based conversational memory for websocket conversations so follow-up commands such as “click it again” or “click the second button” can be disambiguated using recent turns.
-- Persistent interaction logging in MongoDB, including the transcript, selected action, confidence, session ID, conversational context, and generated TTS context.
+### Newly implemented features
 
-Additional intelligence and UX improvements in this release:
-
+- **Multi-step task planning and queue execution**: Compound requests can now be broken into ordered action steps and queued for sequential execution, supporting flows such as “open the cart and then go to checkout.”
+- **Improved resilience to rate limiting**: the planner can gracefully degrade to deterministic behavior instead of failing hard when the provider returns 429 or temporary service errors.
+- **Conversational session memory**: follow-up commands can now reuse recent context for better disambiguation.
+- **Structured action planning and clarification flow**: the assistant supports informational `RESPOND` actions, `CLARIFY` prompts, and richer execution decisions.
 - **Fast-path direct-match execution**: If a spoken command clearly matches an on-screen button or link label, the widget can execute it immediately on the client without waiting for the backend LLM.
 - **Low-latency spoken replies**: Short spoken acknowledgements use the browser speech synthesis path first, with fallback to the TTS API for longer responses.
 - **Project-aware informational responses**: Questions such as “What is my project about?” or “Introduce yourself” now return a direct spoken answer grounded in the current project name and description.
@@ -313,7 +313,7 @@ The planner converts the spoken request into an action plan. It looks at the tra
 
 The system can generate a spoken reply after the action plan is created or executed. That voice output is produced server-side and played back in the browser.
 
-### Project dashboard
+### Project dashboard (Different Repo)
 
 The React dashboard is where project metadata is created and refined. It helps describe the website and generate the embed snippet that gives the widget the right context.
 
@@ -401,19 +401,11 @@ The current implementation is strongest in:
 - structured table/grid extraction and numeric parsing for better data-aware responses
 - overlay/modal dismissal support to reduce blocked interactions
 - Planner supports `RESPOND` and `CLARIFY` flows for safer, more helpful automation
+- Multi-step tasks automation via queue planing
 
 ## Why this project exists
 
 The goal is straightforward: let people use a website in a more natural way. Instead of relying on manual clicks and navigation alone, the system tries to bridge the gap between spoken intent and on-page execution.
-
-## Future direction
-
-The next stage is about reliability and polish. Likely improvements include:
-
-- stronger streaming speech recognition
-- better handling for pauses, noise, and interruptions
-- more accurate planners across different kinds of websites
-- a more natural voice experience for replies and confirmations
 
 ## License
 
