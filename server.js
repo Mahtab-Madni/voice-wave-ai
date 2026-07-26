@@ -12,6 +12,7 @@ import voiceRoutes from "./server/voice/routes.js";
 import statsRoutes from "./server/routes/statsRoutes.js";
 import metricsRoutes from "./server/routes/metricesRoutes.js";
 import { setupVoiceWebSocket } from "./server/voice/websocket.js";
+import { createCorsOptions } from "./server/corsConfig.js";
 
 dotenv.config();
 
@@ -19,27 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  "http://localhost:5173",
-  "https://voice-wave-xi.vercel.app",
-].filter(Boolean);
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
-
-      callback(new Error("Not allowed by CORS"));
-    },
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  }),
-);
+app.use(cors(createCorsOptions(process.env)));
 
 app.options("*", cors());
 
