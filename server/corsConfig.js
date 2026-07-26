@@ -15,6 +15,30 @@ export function createCorsOptions(env = process.env) {
 
   const allowAllOrigins = env.ALLOW_ALL_ORIGINS === "true";
 
+  const matchesAllowedOrigin = (origin) => {
+    const normalizedOrigin = origin.toLowerCase();
+
+    if (
+      normalizedOrigin.startsWith("http://localhost") ||
+      normalizedOrigin.startsWith("http://127.0.0.1") ||
+      normalizedOrigin.includes(".vercel.app") ||
+      normalizedOrigin.includes(".railway.app") ||
+      normalizedOrigin.includes(".up.railway.app")
+    ) {
+      return true;
+    }
+
+    return allowedOrigins.some((entry) => {
+      if (entry === origin) return true;
+      if (!entry.includes("*")) return false;
+
+      const pattern = new RegExp(
+        `^${escapeRegExp(entry).replace(/\\\*/g, ".+")}$`,
+      );
+      return pattern.test(origin);
+    });
+  };
+
   return {
     origin: (origin, callback) => {
       if (!origin) {
@@ -22,18 +46,7 @@ export function createCorsOptions(env = process.env) {
         return;
       }
 
-      if (
-        allowAllOrigins ||
-        allowedOrigins.some((entry) => {
-          if (entry === origin) return true;
-          if (!entry.includes("*")) return false;
-
-          const pattern = new RegExp(
-            `^${escapeRegExp(entry).replace(/\\\*/g, ".+")}$`,
-          );
-          return pattern.test(origin);
-        })
-      ) {
+      if (allowAllOrigins || matchesAllowedOrigin(origin)) {
         callback(null, true);
         return;
       }
