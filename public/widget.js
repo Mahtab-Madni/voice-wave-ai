@@ -719,6 +719,8 @@
         right: 1.5rem;
         bottom: 1.5rem;
         z-index: 2147483647;
+        touch-action: none;
+        user-select: none;
         width: 60px;
         height: 60px;
         border-radius: 50%;
@@ -745,6 +747,8 @@
         right: 1.5rem;
         bottom: 1.5rem;
         z-index: 2147483647;
+        touch-action: none;
+        user-select: none;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -766,6 +770,14 @@
 
       #${overlayId}.is-hidden {
         display: none !important;
+      }
+
+      #${triggerId}, #${overlayId} {
+        cursor: grab;
+      }
+
+      #${triggerId}.is-dragging, #${overlayId}.is-dragging {
+        cursor: grabbing;
       }
 
       #${overlayId} .voice-widget-header {
@@ -925,6 +937,135 @@
 
   function getOverlay() {
     return document.getElementById(overlayId);
+  }
+
+  function getWidgetPositionStorageKey() {
+    return "voice-widget-position";
+  }
+
+  function getStoredWidgetPosition() {
+    try {
+      const rawValue = window.localStorage?.getItem(
+        getWidgetPositionStorageKey(),
+      );
+      if (!rawValue) return null;
+      const parsed = JSON.parse(rawValue);
+      if (
+        typeof parsed?.left === "number" &&
+        typeof parsed?.top === "number" &&
+        Number.isFinite(parsed.left) &&
+        Number.isFinite(parsed.top)
+      ) {
+        return { left: parsed.left, top: parsed.top };
+      }
+    } catch (error) {
+      console.warn("[voice-widget] failed to read saved position", error);
+    }
+    return null;
+  }
+
+  function persistWidgetPosition(left, top) {
+    try {
+      window.localStorage?.setItem(
+        getWidgetPositionStorageKey(),
+        JSON.stringify({ left, top }),
+      );
+    } catch (error) {
+      console.warn("[voice-widget] failed to save position", error);
+    }
+  }
+
+  function clampWidgetPosition(left, top, element) {
+    const padding = 12;
+    const reference =
+      element || getOverlay() || document.getElementById(triggerId);
+    if (!reference) return { left, top };
+
+    const rect = reference.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return { left, top };
+
+    const maxLeft = Math.max(padding, window.innerWidth - rect.width - padding);
+    const maxTop = Math.max(
+      padding,
+      window.innerHeight - rect.height - padding,
+    );
+
+    return {
+      left: Math.min(Math.max(padding, left), maxLeft),
+      top: Math.min(Math.max(padding, top), maxTop),
+    };
+  }
+
+  function applyWidgetPosition(left, top) {
+    const trigger = document.getElementById(triggerId);
+    const overlay = getOverlay();
+    const clamped = clampWidgetPosition(left, top, overlay || trigger);
+
+    if (trigger) {
+      trigger.style.left = `${clamped.left}px`;
+      trigger.style.top = `${clamped.top}px`;
+      trigger.style.right = "auto";
+      trigger.style.bottom = "auto";
+    }
+
+    if (overlay) {
+      overlay.style.left = `${clamped.left}px`;
+      overlay.style.top = `${clamped.top}px`;
+      overlay.style.right = "auto";
+      overlay.style.bottom = "auto";
+    }
+
+    persistWidgetPosition(clamped.left, clamped.top);
+  }
+
+  function makeWidgetDraggable(element) {
+    if (!element) return;
+
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+    let moved = false;
+
+    const handlePointerDown = (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest("button")) return;
+
+      const rect = element.getBoundingClientRect();
+      isDragging = true;
+      moved = false;
+      startX = event.clientX;
+      startY = event.clientY;
+      startLeft = rect.left;
+      startTop = rect.top;
+      element.classList.add("is-dragging");
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const handlePointerMove = (event) => {
+      if (!isDragging) return;
+      const nextLeft = startLeft + event.clientX - startX;
+      const nextTop = startTop + event.clientY - startY;
+      applyWidgetPosition(nextLeft, nextTop);
+      moved = true;
+    };
+
+    const handlePointerUp = (event) => {
+      if (!isDragging) return;
+      isDragging = false;
+      element.classList.remove("is-dragging");
+      if (moved) {
+        event?.preventDefault();
+        event?.stopPropagation();
+      }
+    };
+
+    element.addEventListener("pointerdown", handlePointerDown);
+    element.addEventListener("pointermove", handlePointerMove);
+    element.addEventListener("pointerup", handlePointerUp);
+    element.addEventListener("pointercancel", handlePointerUp);
   }
 
   function setListeningVisualState(isListening) {
@@ -1566,6 +1707,19 @@
     overlay.appendChild(copy);
 
     document.body.appendChild(overlay);
+
+    const storedPosition = getStoredWidgetPosition();
+    if (storedPosition) {
+      applyWidgetPosition(storedPosition.left, storedPosition.top);
+    } else {
+      const padding = 24;
+      const defaultLeft = Math.max(padding, window.innerWidth - 72 - padding);
+      const defaultTop = Math.max(padding, window.innerHeight - 72 - padding);
+      applyWidgetPosition(defaultLeft, defaultTop);
+    }
+
+    makeWidgetDraggable(trigger);
+    makeWidgetDraggable(overlay);
   }
 
   function setStatus(message) {
