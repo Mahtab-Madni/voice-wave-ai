@@ -707,6 +707,7 @@
   const closeIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
   const micIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mic-svg"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`;
   const stopIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="stop-svg"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>`;
+  const speakerIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="speaker-svg"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
 
   function injectWidgetStyles() {
     if (document.getElementById(styleId)) return;
@@ -762,6 +763,13 @@
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         box-sizing: border-box;
         transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.2s ease, opacity 0.2s ease;
+      }
+
+      #${overlayId}.is-speaking button#${buttonId} {
+        background: rgba(16, 185, 129, 0.2);
+        border-color: rgba(16, 185, 129, 0.55);
+        color: #10b981;
+        animation: voice-widget-speak-pulse 1.2s infinite ease-in-out;
       }
 
       #${overlayId}.is-hidden {
@@ -906,6 +914,18 @@
 
       #${labelId} {
         display: none;
+      }
+
+      @keyframes voice-widget-speak-pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+        }
+        70% {
+          box-shadow: 0 0 0 12px rgba(16, 185, 129, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+        }
       }
 
       @keyframes voice-widget-pulse {
@@ -1056,6 +1076,22 @@
   //   element.addEventListener("pointercancel", handlePointerUp);
   // }
 
+  function setSpeakingState(isSpeaking) {
+    const overlay = getOverlay();
+    if (!overlay) return;
+
+    overlay.classList.toggle("is-speaking", Boolean(isSpeaking));
+
+    const button = document.getElementById(buttonId);
+    if (!button) return;
+
+    if (isSpeaking) {
+      button.innerHTML = speakerIconSvg;
+    } else {
+      button.innerHTML = scriptState.listening ? stopIconSvg : micIconSvg;
+    }
+  }
+
   function setListeningVisualState(isListening) {
     const overlay = getOverlay();
     if (!overlay) return;
@@ -1143,6 +1179,7 @@
       ) {
         scriptState.activeAudio = null;
       }
+      setSpeakingState(false);
     };
 
     const resolvePlayback = () => {
@@ -1173,6 +1210,7 @@
       // finished (or errored/timed out) — otherwise audio capture resumes
       // while the assistant is still speaking and the mic picks up its own
       // TTS output.
+      setSpeakingState(true);
       await new Promise((resolve) => {
         let settled = false;
         const settlePlayback = () => {
