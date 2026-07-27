@@ -42,6 +42,13 @@ test("widget invalidates stale speech recognition sessions during stop and resta
   );
 });
 
+test("widget close button tears down the audio pipeline before collapsing", () => {
+  assert.match(
+    widgetSource,
+    /function collapseWidget\(\) \{[\s\S]*?stopListening\(\);[\s\S]*?scriptState\.isExpanded = false;/,
+  );
+});
+
 test("widget supports reading dropdown options and selecting by visible option text", () => {
   assert.match(widgetSource, /getSelectOptionLabels/);
   assert.match(widgetSource, /selectOptionByLabel/);

@@ -1076,9 +1076,7 @@
   }
 
   function collapseWidget() {
-    if (scriptState.listening) {
-      stopListening();
-    }
+    stopListening();
     scriptState.isExpanded = false;
     const trigger = document.getElementById(triggerId);
     const overlay = getOverlay();
@@ -1709,7 +1707,8 @@
     const closeBtn = document.createElement("button");
     closeBtn.id = closeButtonId;
     closeBtn.innerHTML = closeIconSvg;
-    closeBtn.title = "Close widget";
+    closeBtn.title = "Stop listening";
+    closeBtn.setAttribute("aria-label", "Stop listening");
     closeBtn.addEventListener("click", collapseWidget);
     header.appendChild(closeBtn);
 

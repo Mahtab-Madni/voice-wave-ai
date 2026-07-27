@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildActionPlan,
+  generateTtsContext,
   normalizeActionPlan,
 } from "../server/voice/planner.js";
 
@@ -185,4 +186,22 @@ test("buildActionPlan uses separate planning and TTS Groq keys", async () => {
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test("generateTtsContext refuses unsupported actions and returns a grounded fallback", async () => {
+  const fallback = await generateTtsContext(
+    "click the checkout button",
+    { action: "CLICK", target: "#missing-button" },
+    [
+      {
+        element: "button",
+        text: "Sign in",
+        selector: "#signin",
+        contextText: "Header",
+      },
+    ],
+    { ttsApiKey: "tts-key" },
+  );
+
+  assert.match(fallback, /i don.t find/i);
 });

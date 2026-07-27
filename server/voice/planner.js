@@ -572,8 +572,34 @@ function buildFallbackTtsContext(transcript, actionPlan, elements = []) {
   const action = String(actionPlan?.action || "CLICK").toUpperCase();
   const targetLabel = resolveActionTargetLabel(actionPlan, elements);
   const keyLabel = actionPlan?.value || "Enter";
+  const hasTargetMatch = Boolean(targetLabel);
+  const requestedText = normalizeText(transcript || "");
+  const isUnsupportedRequest =
+    (action === "CLICK" ||
+      action === "TYPE" ||
+      action === "SELECT_OPTION" ||
+      action === "CLEAR_INPUT" ||
+      action === "HOVER" ||
+      action === "HIGHLIGHT_ELEMENT" ||
+      action === "FOCUS" ||
+      action === "READ_TEXT") &&
+    !hasTargetMatch &&
+    !requestedText.includes("page") &&
+    !requestedText.includes("scroll");
+
+  if (action === "NONE") {
+    return "I don’t find that on this page.";
+  }
+
+  if (action === "RESPOND") {
+    const message = String(actionPlan?.message || "").trim();
+    return message ? message : "I don’t find that on this page.";
+  }
 
   if (action === "TYPE") {
+    if (!hasTargetMatch) {
+      return "I don’t find that field on this page.";
+    }
     return productPhrase
       ? `Typing ${productPhrase} into the requested field.`
       : targetLabel
@@ -619,28 +645,43 @@ function buildFallbackTtsContext(transcript, actionPlan, elements = []) {
   }
 
   if (action === "SELECT_OPTION") {
+    if (!hasTargetMatch) {
+      return "I don’t find that option on this page.";
+    }
     return targetLabel
       ? `Selecting ${targetLabel}.`
       : "Choosing the requested option.";
   }
 
   if (action === "CLEAR_INPUT") {
+    if (!hasTargetMatch) {
+      return "I don’t find that field on this page.";
+    }
     return targetLabel ? `Clearing ${targetLabel}.` : "Clearing the field.";
   }
 
   if (action === "HOVER") {
+    if (!hasTargetMatch) {
+      return "I don’t find that element on this page.";
+    }
     return targetLabel
       ? `Hovering over ${targetLabel}.`
       : "Hovering over the requested element.";
   }
 
   if (action === "HIGHLIGHT_ELEMENT" || action === "FOCUS") {
+    if (!hasTargetMatch) {
+      return "I don’t find that element on this page.";
+    }
     return targetLabel
       ? `Highlighting ${targetLabel}.`
       : "Highlighting the requested element.";
   }
 
   if (action === "READ_TEXT") {
+    if (!hasTargetMatch) {
+      return "I don’t find that text on this page.";
+    }
     return targetLabel
       ? `Reading ${targetLabel}.`
       : "Reading the requested text.";
@@ -650,13 +691,13 @@ function buildFallbackTtsContext(transcript, actionPlan, elements = []) {
     return "Giving you a brief summary of the page.";
   }
 
+  if (isUnsupportedRequest) {
+    return "I don’t find that on this page.";
+  }
+
   if (productPhrase) {
     const normalizedProduct = normalizeText(productPhrase);
     return `Adding ${normalizedProduct} to your cart.`;
-  }
-
-  if (action === "NONE") {
-    return "I could not find a matching action for that request.";
   }
 
   if (targetLabel) {
@@ -671,7 +712,7 @@ function buildConversationContextPrompt(conversationContext = "") {
   return `Conversation context:\n${conversationContext}\n`;
 }
 
-async function generateTtsContext(
+export async function generateTtsContext(
   transcript,
   actionPlan,
   elements = [],
@@ -699,9 +740,25 @@ async function generateTtsContext(
   try {
     const isSummaryAction =
       String(actionPlan?.action || "").toUpperCase() === "SUMMARIZE_PAGE";
+    const groundedFallback = buildFallbackTtsContext(
+      transcript,
+      actionPlan,
+      elements,
+    );
+    const requiresGroundedReply =
+      String(actionPlan?.action || "").toUpperCase() === "CLICK" ||
+      String(actionPlan?.action || "").toUpperCase() === "TYPE" ||
+      String(actionPlan?.action || "").toUpperCase() === "SELECT_OPTION" ||
+      String(actionPlan?.action || "").toUpperCase() === "CLEAR_INPUT" ||
+      String(actionPlan?.action || "").toUpperCase() === "HOVER" ||
+      String(actionPlan?.action || "").toUpperCase() === "HIGHLIGHT_ELEMENT" ||
+      String(actionPlan?.action || "").toUpperCase() === "FOCUS" ||
+      String(actionPlan?.action || "").toUpperCase() === "READ_TEXT";
     const systemPrompt = isSummaryAction
       ? `You are a voice assistant summarizing a web page for speech. Write one short, natural sentence that is easy to hear aloud. Keep it under 20 words, sound conversational, and avoid jargon. Return plain text only. Example: "Here’s a brief summary of the page."`
-      : `You are a voice assistant. Write a short spoken sentence for a web automation action, keeping it under 20 words. Mention the product name if the user clearly mentioned one. Return plain text only. You can use last conversational context to respond more naturally using prior turns. Make the response conversational, for example:
+      : requiresGroundedReply
+        ? `You are a voice assistant for web automation. Only describe actions or targets that are clearly present on the current page. If the requested element or action is not visible or cannot be confirmed from the page context, respond with a short grounded message such as "I don’t find that on this page." Do not invent UI elements, buttons, links, or sections. Return plain text only, under 20-30 words.`
+        : `You are a voice assistant. Write a short spoken sentence for a web automation action, keeping it under 20-30 words. Mention the product name if the user clearly mentioned one. Return plain text only. You can use last conversational context to respond more naturally using prior turns. Make the response conversational, for example:
 
 “I’m adding the iPhone to your cart.”
 “Navigating to the requested page.”`;
@@ -731,6 +788,12 @@ async function generateTtsContext(
                 action: actionPlan?.action || "CLICK",
                 target: actionPlan?.target || null,
                 targetText: actionPlan?.reasoning || null,
+                availableElements: elements.map((entry) => ({
+                  text: entry?.text || "",
+                  selector: entry?.selector || "",
+                  contextText: entry?.contextText || "",
+                  element: entry?.element || "",
+                })),
                 conversationContext: buildConversationContextPrompt(
                   options.conversationContext || "",
                 ),
@@ -752,7 +815,16 @@ async function generateTtsContext(
 
     const data = JSON.parse(responseInfo.responseText || "{}");
     const generated = String(data?.choices?.[0]?.message?.content || "").trim();
-    return generated || fallback;
+    const groundedGenerated =
+      generated &&
+      !/i (don.t|do not) find that|not present|not on this page/i.test(
+        generated,
+      ) &&
+      requiresGroundedReply &&
+      !elements.some((entry) => entry?.selector === actionPlan?.target)
+        ? groundedFallback
+        : generated;
+    return groundedGenerated || groundedFallback;
   } catch (error) {
     console.warn("[tts] falling back to deterministic context:", error.message);
     return fallback;
