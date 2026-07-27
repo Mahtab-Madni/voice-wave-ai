@@ -1589,6 +1589,24 @@
     return [];
   }
 
+  function shouldPauseForNavigation(actionPlan) {
+    if (!actionPlan || typeof actionPlan !== "object") return false;
+
+    const action = String(actionPlan.action || "").toUpperCase();
+    if (["NAVIGATE", "GO_BACK", "GO_FORWARD", "RELOAD"].includes(action)) {
+      return true;
+    }
+
+    if (action !== "CLICK") return false;
+
+    const target = resolveActionTarget(actionPlan.target);
+    if (!target) return false;
+
+    if (target.tagName === "A" && target.hasAttribute("href")) return true;
+    if (target.tagName === "FORM") return true;
+    return false;
+  }
+
   function getPendingActionStorageKey() {
     return "__voice_widget_pending_actions__";
   }
@@ -1673,8 +1691,9 @@
           continue;
         }
 
-        if (nextAction.action === "NAVIGATE") {
+        if (shouldPauseForNavigation(nextAction)) {
           persistPendingQueuedActions(scriptState.queuedActions);
+          break;
         }
 
         if (nextAction.action === "RESPOND") {
@@ -1713,6 +1732,9 @@
     } finally {
       scriptState.executingQueuedActions = false;
       scriptState.queuedActions = [];
+      if (!scriptState.pendingClarify) {
+        clearPendingQueuedActions();
+      }
       if (scriptState.processing && !scriptState.pendingClarify) {
         endProcessingCycle();
       }
