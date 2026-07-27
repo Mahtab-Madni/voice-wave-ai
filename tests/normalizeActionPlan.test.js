@@ -309,3 +309,85 @@ test("buildRuleBasedActionPlan clarifies when a text value was not provided", ()
   assert.equal(plan.action, "CLARIFY");
   assert.match(plan.message, /say your message|generate that message/i);
 });
+
+test("buildRuleBasedActionPlan generates a feedback message when the user asks to generate it for me", () => {
+  const plan = buildRuleBasedActionPlan(
+    "fill the feedback form with a message generate it for me",
+    [
+      {
+        selector: "#feedback-message",
+        element: "textarea",
+        position: { y: 1800, height: 60 },
+      },
+    ],
+  );
+
+  assert.equal(plan.action, "TYPE");
+  assert.match(plan.value, /great work|website/i);
+});
+
+test("buildActionPlan preserves generated text intent in multi-step plans", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    text: async () =>
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                action: "CLICK",
+                target: "#start",
+                plan: [
+                  {
+                    action: "TYPE",
+                    target: "#feedback-message",
+                    value: null,
+                    scrollRequired: false,
+                    confidence: 0.8,
+                    reasoning: "Fill the feedback form.",
+                  },
+                  {
+                    action: "CLICK",
+                    target: "#submit",
+                    scrollRequired: false,
+                    confidence: 0.8,
+                    reasoning: "Submit the feedback.",
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }),
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            content: "ok",
+          },
+        },
+      ],
+    }),
+  });
+
+  try {
+    const plan = await buildActionPlan(
+      "go to about us page and fill the feedback form with a message generate it for me",
+      [
+        {
+          selector: "#feedback-message",
+          element: "textarea",
+          position: { y: 1800, height: 60 },
+        },
+      ],
+      { groqApiKey: "test-key", ttsApiKey: "tts-key" },
+    );
+
+    const typeStep = plan.plan?.find((entry) => entry?.action === "TYPE");
+    assert.ok(typeStep, "expected a TYPE step in the multi-step plan");
+    assert.match(typeStep.value, /great work|website/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

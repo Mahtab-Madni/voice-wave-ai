@@ -17,7 +17,7 @@ Rules:
 3. Multi-Step Planning:
   - If the user asks for more than one action, break the request into a sequence of ordered steps and return them as a JSON array under the field "plan".
   - When the user says a message or text should come "from your end", "from your side", or "by you" in a multi-step task, treat that as an instruction to generate a natural, relevant message yourself and fill it into the TYPE action rather than leaving the value empty or asking for clarification.
-  - If the user asks to fill a field or enter text but does not provide the actual content, emit a CLARIFY action instead of inventing a placeholder value. For message-style tasks, use a concise prompt such as "Please say your message, or I can generate that message for you." If the user explicitly requests the assistant to generate the content (for example, phrases like "from your end", "from your side", "by you", "generate it for me", or "write one for me"), fill the TYPE value with a natural message rather than clarifying.
+  - If the user asks to fill a field or enter text but does not provide the actual content, emit a CLARIFY action instead of inventing a placeholder value. For message-style tasks, use a concise prompt such as "Please say your message, or I can generate that message for you." If the user explicitly requests the assistant to generate the content (for example, phrases like "from your end", "from your side", "by you", "generate it for me", or "write one for me"), fill the TYPE value with a natural message rather than clarifying. In multi-step plans, preserve that instruction on the relevant TYPE step so the generated value is not dropped when the plan is structured.
   - The first item in the plan should be the first action to execute, the second item the next, and so on.
   - For compound requests like "click the cart button then go to payment" or "open the menu and then select settings", produce a plan with multiple actions in the correct order.
   - Each plan entry should be a normal action object with the same fields as the single-action schema.
@@ -374,6 +374,12 @@ function isGenericTypedValue(value) {
   );
 }
 
+function isAssistantGeneratedTextRequest(transcript) {
+  return /from your (end|side)|by you|from you|generate it for me|generate a message for me|generate a feedback message|write one for me|write it for me|write a message for me|make one for me/i.test(
+    transcript,
+  );
+}
+
 function hasExplicitTypedValue(transcript) {
   const quotedMatch = transcript.match(
     /(?:type|enter|fill|write)[^\n]*?["']([^"']+)["']/i,
@@ -388,7 +394,7 @@ function hasExplicitTypedValue(transcript) {
   );
   if (trailingMatch?.[1]) return !isGenericTypedValue(trailingMatch[1]);
 
-  return false;
+  return isAssistantGeneratedTextRequest(transcript);
 }
 
 function extractTypedValue(transcript) {
@@ -400,11 +406,11 @@ function extractTypedValue(transcript) {
   const emailMatch = transcript.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
   if (emailMatch?.[0]) return emailMatch[0];
 
-  const fromYourEnd = /from your (end|side)|by you|from you/i.test(transcript);
+  const shouldGenerateValue = isAssistantGeneratedTextRequest(transcript);
   const isMessageIntent = /message|feedback|comment|review|note/i.test(
     transcript,
   );
-  if (fromYourEnd && isMessageIntent) {
+  if (shouldGenerateValue && isMessageIntent) {
     return "Great work on your website.";
   }
 
@@ -416,6 +422,54 @@ function extractTypedValue(transcript) {
   }
 
   return "hello@example.com";
+}
+
+function applyGeneratedTextIntent(plan, transcript) {
+  const normalizedTranscript = normalizeText(transcript || "");
+  const shouldGenerateValue = isAssistantGeneratedTextRequest(transcript);
+  const isMessageIntent = /message|feedback|comment|review|note/i.test(
+    normalizedTranscript,
+  );
+
+  if (
+    !shouldGenerateValue ||
+    !isMessageIntent ||
+    !plan ||
+    typeof plan !== "object"
+  ) {
+    return plan;
+  }
+
+  const generatedValue = extractTypedValue(transcript);
+  const planSteps = Array.isArray(plan.plan) ? plan.plan.filter(Boolean) : [];
+
+  if (planSteps.length > 0) {
+    const updatedSteps = planSteps.map((entry) => {
+      if (entry?.action !== "TYPE") return entry;
+      const hasConcreteValue =
+        Boolean(entry?.value) && !isGenericTypedValue(entry.value);
+      if (hasConcreteValue) return entry;
+      return { ...entry, value: generatedValue };
+    });
+
+    return {
+      ...plan,
+      plan: updatedSteps,
+      ...(plan.action === "TYPE" &&
+      (!plan.value || isGenericTypedValue(plan.value))
+        ? { value: generatedValue }
+        : {}),
+    };
+  }
+
+  if (
+    plan.action === "TYPE" &&
+    (!plan.value || isGenericTypedValue(plan.value))
+  ) {
+    return { ...plan, value: generatedValue };
+  }
+
+  return plan;
 }
 
 function buildMissingValueClarification(transcript, elements = []) {
@@ -1359,12 +1413,12 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
   );
 
   const explicitValue = hasExplicitTypedValue(transcript);
-  const fromYourEnd = /from your (end|side)|by you|from you/i.test(transcript);
+  const shouldGenerateValue = isAssistantGeneratedTextRequest(transcript);
   const isMessageIntent = /message|feedback|comment|review|note/i.test(
     normalizedTranscript,
   );
 
-  if (isTypeAction && !explicitValue && !fromYourEnd) {
+  if (isTypeAction && !explicitValue && !shouldGenerateValue) {
     return buildMissingValueClarification(transcript, elements);
   }
 
@@ -1820,18 +1874,22 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       transcript,
       elements,
     );
+    const plannedActionWithGeneratedText = applyGeneratedTextIntent(
+      plannedAction,
+      transcript,
+    );
     console.log(
       "[planner][normalized] action plan:",
-      JSON.stringify(plannedAction).slice(0, 1024),
+      JSON.stringify(plannedActionWithGeneratedText).slice(0, 1024),
     );
     const ttsContext = await generateTtsContext(
       transcript,
-      plannedAction,
+      plannedActionWithGeneratedText,
       elements,
       llmOptions,
     );
     return {
-      ...plannedAction,
+      ...plannedActionWithGeneratedText,
       ttsContext,
     };
   } catch (error) {
@@ -1850,9 +1908,13 @@ export async function buildActionPlan(transcript, elements, options = {}) {
         transcript,
         elements,
       );
+      const plannedFallbackWithGeneratedText = applyGeneratedTextIntent(
+        plannedFallback,
+        transcript,
+      );
       const ttsContext = await generateTtsContext(
         transcript,
-        plannedFallback,
+        plannedFallbackWithGeneratedText,
         elements,
         llmOptions,
       );
@@ -1860,7 +1922,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
         "[planner][plan] falling back to deterministic planning after LLM failure:",
         error.message,
       );
-      return { ...plannedFallback, ttsContext };
+      return { ...plannedFallbackWithGeneratedText, ttsContext };
     }
 
     console.error("[llm] planning failed:", error.message);
