@@ -135,3 +135,42 @@ test("findFallbackActionTarget uses a visible input fallback for TYPE actions", 
 
   assert.equal(target, candidates[1]);
 });
+
+test("shouldResumeListeningAfterQueuedActions stays false when a navigation pause still has queued work", () => {
+  const helperStart = widgetSource.indexOf(
+    "function shouldResumeListeningAfterQueuedActions",
+  );
+  assert.notEqual(helperStart, -1, "expected queue-resume helper to be present");
+
+  const braceStart = widgetSource.indexOf("{", helperStart);
+  let depth = 0;
+  let end = -1;
+
+  for (let index = braceStart; index < widgetSource.length; index += 1) {
+    const char = widgetSource[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = index;
+        break;
+      }
+    }
+  }
+
+  assert.notEqual(end, -1, "expected queue-resume helper body to end");
+  const functionSource = widgetSource.slice(helperStart, end + 1);
+
+  const context = { console: { debug() {}, warn() {} } };
+  vm.createContext(context);
+  vm.runInContext(functionSource, context);
+
+  const shouldResume = context.shouldResumeListeningAfterQueuedActions(
+    true,
+    true,
+    false,
+  );
+
+  assert.equal(shouldResume, false);
+});

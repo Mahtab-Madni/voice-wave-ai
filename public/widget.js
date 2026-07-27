@@ -649,6 +649,7 @@
     initChunkLastSentAt: 0,
     queuedActions: [],
     executingQueuedActions: false,
+    awaitingQueuedNavigationResume: false,
   };
 
   const overlayId = "voice-widget-overlay";
@@ -1661,6 +1662,17 @@
     }
   }
 
+  function shouldResumeListeningAfterQueuedActions(
+    isProcessing,
+    pausedForNavigation,
+    pendingClarify,
+    awaitingQueuedNavigationResume,
+  ) {
+    return Boolean(
+      isProcessing && !pendingClarify && !pausedForNavigation && !awaitingQueuedNavigationResume,
+    );
+  }
+
   function resumePendingQueuedActions() {
     const queuedActions = restorePendingQueuedActions();
     if (!Array.isArray(queuedActions) || queuedActions.length === 0) {
@@ -1669,6 +1681,7 @@
 
     console.debug("[voice-widget] resuming queued actions", queuedActions);
     clearPendingQueuedActions();
+    scriptState.awaitingQueuedNavigationResume = false;
     void runQueuedActionPlan({
       action: queuedActions[0]?.action || "NONE",
       plan: queuedActions,
@@ -1704,6 +1717,7 @@
           await new Promise((resolve) => window.setTimeout(resolve, 450));
           persistPendingQueuedActions(scriptState.queuedActions);
           pausedForNavigation = true;
+          scriptState.awaitingQueuedNavigationResume = true;
           break;
         }
 
@@ -1746,7 +1760,14 @@
       if (!scriptState.pendingClarify && !pausedForNavigation) {
         clearPendingQueuedActions();
       }
-      if (scriptState.processing && !scriptState.pendingClarify) {
+      if (
+        shouldResumeListeningAfterQueuedActions(
+          scriptState.processing,
+          pausedForNavigation,
+          scriptState.pendingClarify,
+          scriptState.awaitingQueuedNavigationResume,
+        )
+      ) {
         endProcessingCycle();
       }
     }
@@ -2594,7 +2615,11 @@
       setFeedback("Stopped listening.");
       return;
     }
-    if (scriptState.sessionActive && !scriptState.listening) {
+    if (
+      scriptState.sessionActive &&
+      !scriptState.listening &&
+      !scriptState.awaitingQueuedNavigationResume
+    ) {
       resumeAudioCapture();
       return;
     }
