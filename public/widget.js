@@ -1667,6 +1667,7 @@
       return false;
     }
 
+    console.debug("[voice-widget] resuming queued actions", queuedActions);
     clearPendingQueuedActions();
     void runQueuedActionPlan({
       action: queuedActions[0]?.action || "NONE",
@@ -1680,9 +1681,11 @@
     if (queuedActions.length === 0) return;
 
     scriptState.queuedActions = queuedActions;
+    console.debug("[voice-widget] executing queued action plan", queuedActions);
     if (scriptState.executingQueuedActions) return;
 
     scriptState.executingQueuedActions = true;
+    let pausedForNavigation = false;
 
     try {
       while (scriptState.queuedActions.length > 0) {
@@ -1692,7 +1695,15 @@
         }
 
         if (shouldPauseForNavigation(nextAction)) {
+          console.debug(
+            "[voice-widget] paused queue for navigation action",
+            nextAction,
+          );
+          await announceAction(nextAction);
+          executeActionPlan(nextAction);
+          await new Promise((resolve) => window.setTimeout(resolve, 450));
           persistPendingQueuedActions(scriptState.queuedActions);
+          pausedForNavigation = true;
           break;
         }
 
@@ -1732,7 +1743,7 @@
     } finally {
       scriptState.executingQueuedActions = false;
       scriptState.queuedActions = [];
-      if (!scriptState.pendingClarify) {
+      if (!scriptState.pendingClarify && !pausedForNavigation) {
         clearPendingQueuedActions();
       }
       if (scriptState.processing && !scriptState.pendingClarify) {
