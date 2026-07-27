@@ -205,3 +205,22 @@ test("generateTtsContext refuses unsupported actions and returns a grounded fall
 
   assert.match(fallback, /i don.t find/i);
 });
+
+test("generateTtsContext uses conversational fallback phrasing for visible actions", async () => {
+  const fallback = await generateTtsContext(
+    "go to community page",
+    { action: "CLICK", target: "#community" },
+    [
+      {
+        element: "button",
+        text: "Community",
+        selector: "#community",
+        contextText: "Top navigation",
+      },
+    ],
+    { ttsApiKey: "tts-key" },
+  );
+
+  assert.match(fallback, /clicking/i);
+  assert.doesNotMatch(fallback, /i['’]m|i['’]ll/i);
+});

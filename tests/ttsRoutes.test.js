@@ -49,6 +49,11 @@ test("widget close button tears down the audio pipeline before collapsing", () =
   );
 });
 
+test("widget uses conversational click speech for navigation-style actions", () => {
+  assert.match(widgetSource, /Clicking \$\{targetLabel\}/);
+  assert.match(widgetSource, /Opening \$\{actionPlan\.value\}/);
+});
+
 test("widget supports reading dropdown options and selecting by visible option text", () => {
   assert.match(widgetSource, /getSelectOptionLabels/);
   assert.match(widgetSource, /selectOptionByLabel/);

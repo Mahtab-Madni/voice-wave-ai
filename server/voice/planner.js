@@ -601,7 +601,7 @@ function buildFallbackTtsContext(transcript, actionPlan, elements = []) {
       return "I don’t find that field on this page.";
     }
     return productPhrase
-      ? `Typing ${productPhrase} into the requested field.`
+      ? `Typing ${productPhrase} into the field.`
       : targetLabel
         ? `Typing into ${targetLabel}.`
         : "Typing the requested information into the field.";
@@ -691,6 +691,15 @@ function buildFallbackTtsContext(transcript, actionPlan, elements = []) {
     return "Giving you a brief summary of the page.";
   }
 
+  if (action === "CLICK") {
+    if (!hasTargetMatch) {
+      return "I don’t find that on this page.";
+    }
+    return targetLabel
+      ? `Clicking ${targetLabel}.`
+      : "Clicking the requested element.";
+  }
+
   if (isUnsupportedRequest) {
     return "I don’t find that on this page.";
   }
@@ -757,11 +766,11 @@ export async function generateTtsContext(
     const systemPrompt = isSummaryAction
       ? `You are a voice assistant summarizing a web page for speech. Write one short, natural sentence that is easy to hear aloud. Keep it under 20 words, sound conversational, and avoid jargon. Return plain text only. Example: "Here’s a brief summary of the page."`
       : requiresGroundedReply
-        ? `You are a voice assistant for web automation. Only describe actions or targets that are clearly present on the current page. If the requested element or action is not visible or cannot be confirmed from the page context, respond with a short grounded message such as "I don’t find that on this page." Do not invent UI elements, buttons, links, or sections. Return plain text only, under 20-30 words.`
+        ? `You are a voice assistant for web automation. First silently check whether the requested action or target is relevant to the current page by comparing the user's request with the visible page elements and context. Do not expose that internal check in the spoken reply. If the action or target is not clearly present or relevant, respond with a short grounded message such as "I don’t find that on this page." Otherwise, reply with a concise, conversational sentence that sounds natural and human, describing the action in a helpful way. Keep it under 20 words. Examples: “Clicking the community page.” “Scrolling down the page.” “Opening the requested page.”`
         : `You are a voice assistant. Write a short spoken sentence for a web automation action, keeping it under 20-30 words. Mention the product name if the user clearly mentioned one. Return plain text only. You can use last conversational context to respond more naturally using prior turns. Make the response conversational, for example:
 
-“I’m adding the iPhone to your cart.”
-“Navigating to the requested page.”`;
+“Adding the iPhone to your cart.”
+“Opening the requested page.”`;
 
     const responseInfo = await fetchWithRetryAndRotation({
       role: "tts",

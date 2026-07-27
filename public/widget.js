@@ -1407,6 +1407,20 @@
       }
     }
 
+    if (actionPlan.action === "CLICK") {
+      const targetLabel = getActionTargetLabel(actionPlan);
+      if (targetLabel) {
+        return `Clicking ${targetLabel}.`;
+      }
+      return "Clicking the requested target.";
+    }
+
+    if (actionPlan.action === "NAVIGATE") {
+      return actionPlan.value
+        ? `Opening ${actionPlan.value}.`
+        : "Opening the requested page.";
+    }
+
     return actionPlan?.ttsContext || "";
   }
 
@@ -1512,8 +1526,8 @@
 
     if (actionPlan.action === "CLICK") {
       return targetLabel
-        ? `Clicking ${targetLabel}...`
-        : "Clicking the requested target...";
+        ? `Clicking ${targetLabel}.`
+        : "Clicking the requested target.";
     }
 
     return "Executing action...";
