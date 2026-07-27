@@ -1959,8 +1959,142 @@
     window.__CURRENT_ZOOM_LEVEL__ = 1.0;
   }
 
-  function resolveActionTarget(selector) {
-    if (!selector) return null;
+  function normalizeActionText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  function findFallbackActionTarget(actionPlan) {
+    if (!actionPlan || typeof actionPlan !== "object") return null;
+
+    const action = String(actionPlan.action || "").toUpperCase();
+    const searchText = normalizeActionText(
+      [
+        actionPlan.reasoning,
+        actionPlan.ttsContext,
+        actionPlan.message,
+        actionPlan.value,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+
+    const candidates = Array.from(
+      document.querySelectorAll(
+        "a, button, input, select, textarea, summary, [role='button'], [role='link'], [role='menuitem'], [role='tab']",
+      ),
+    );
+
+    let bestElement = null;
+    let bestScore = 0;
+
+    for (const candidate of candidates) {
+      if (!candidate || candidate.disabled) continue;
+      const label = normalizeActionText(
+        [
+          candidate.innerText,
+          candidate.getAttribute("aria-label"),
+          candidate.getAttribute("title"),
+          candidate.getAttribute("placeholder"),
+          candidate.getAttribute("name"),
+          candidate.getAttribute("id"),
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      if (!label) continue;
+
+      let score = 0;
+      if (searchText) {
+        const searchTerms = searchText
+          .split(/\s+/)
+          .filter(Boolean)
+          .filter((term) => term.length > 2);
+        if (label.includes(searchText)) score += 24;
+        searchTerms.forEach((term) => {
+          if (label.includes(term)) score += 6;
+        });
+      }
+
+      if (
+        action === "TYPE" &&
+        (candidate.tagName === "INPUT" || candidate.tagName === "TEXTAREA")
+      ) {
+        score += 5;
+      } else if (
+        action === "CLICK" &&
+        (candidate.tagName === "A" ||
+          candidate.tagName === "BUTTON" ||
+          candidate.getAttribute("role") === "button" ||
+          candidate.getAttribute("role") === "link")
+      ) {
+        score += 5;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestElement = candidate;
+      }
+    }
+
+    if (bestScore >= 5) {
+      console.debug(
+        "[voice-widget] resolved action target via fallback text match",
+        {
+          action,
+          searchText,
+          target: bestElement?.tagName || null,
+        },
+      );
+      return bestElement;
+    }
+
+    if (action === "TYPE") {
+      const genericInput = candidates.find(
+        (candidate) =>
+          (candidate.tagName === "INPUT" || candidate.tagName === "TEXTAREA") &&
+          candidate.getAttribute("type") !== "hidden" &&
+          !candidate.disabled,
+      );
+      if (genericInput) {
+        console.debug("[voice-widget] used generic visible input fallback", {
+          action,
+          searchText,
+        });
+        return genericInput;
+      }
+    }
+
+    if (action === "CLICK") {
+      const genericInteractive = candidates.find(
+        (candidate) =>
+          (candidate.tagName === "A" ||
+            candidate.tagName === "BUTTON" ||
+            candidate.getAttribute("role") === "button" ||
+            candidate.getAttribute("role") === "link") &&
+          !candidate.disabled,
+      );
+      if (genericInteractive) {
+        console.debug("[voice-widget] used generic interactive fallback", {
+          action,
+          searchText,
+        });
+        return genericInteractive;
+      }
+    }
+
+    return null;
+  }
+
+  function resolveActionTarget(selector, actionPlan = null) {
+    if (!selector) {
+      if (actionPlan) {
+        return findFallbackActionTarget(actionPlan);
+      }
+      return null;
+    }
     if (typeof selector !== "string") return null;
 
     const trimmed = selector.trim();
@@ -1994,7 +2128,7 @@
       return document.getElementById(byId[1]);
     }
 
-    return null;
+    return findFallbackActionTarget(actionPlan);
   }
 
   function applyElementHighlight(target) {
@@ -2065,7 +2199,7 @@
     }
 
     if (actionPlan.action === "CLICK") {
-      const target = resolveActionTarget(actionPlan.target);
+      const target = resolveActionTarget(actionPlan.target, actionPlan);
       dismissOverlays();
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2136,7 +2270,7 @@
     }
 
     if (actionPlan.action === "TYPE") {
-      const target = resolveActionTarget(actionPlan.target);
+      const target = resolveActionTarget(actionPlan.target, actionPlan);
       dismissOverlays();
       if (
         target &&
@@ -2199,7 +2333,7 @@
     }
 
     if (actionPlan.action === "SELECT_OPTION") {
-      const target = resolveActionTarget(actionPlan.target);
+      const target = resolveActionTarget(actionPlan.target, actionPlan);
       dismissOverlays();
       if (target && target.tagName === "SELECT") {
         const selected = selectOptionByLabel(target, actionPlan.value || "");
@@ -2212,7 +2346,7 @@
     }
 
     if (actionPlan.action === "CLEAR_INPUT") {
-      const target = resolveActionTarget(actionPlan.target);
+      const target = resolveActionTarget(actionPlan.target, actionPlan);
       if (
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
@@ -2225,7 +2359,7 @@
     }
 
     if (actionPlan.action === "HOVER") {
-      const target = resolveActionTarget(actionPlan.target);
+      const target = resolveActionTarget(actionPlan.target, actionPlan);
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         target.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
@@ -2239,7 +2373,7 @@
       actionPlan.action === "HIGHLIGHT_ELEMENT" ||
       actionPlan.action === "FOCUS"
     ) {
-      const target = resolveActionTarget(actionPlan.target);
+      const target = resolveActionTarget(actionPlan.target, actionPlan);
       if (target) {
         applyElementHighlight(target);
       }
