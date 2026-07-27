@@ -16,6 +16,8 @@ Rules:
 
 3. Multi-Step Planning:
   - If the user asks for more than one action, break the request into a sequence of ordered steps and return them as a JSON array under the field "plan".
+  - When the user says a message or text should come "from your end", "from your side", or "by you" in a multi-step task, treat that as an instruction to generate a natural, relevant message yourself and fill it into the TYPE action rather than leaving the value empty or asking for clarification.
+  - If the user asks to fill a field or enter text but does not provide the actual content, emit a CLARIFY action instead of inventing a placeholder value. For message-style tasks, use a concise prompt such as "Please say your message, or I can generate that message for you." If the user explicitly requests the assistant to generate the content (for example, phrases like "from your end", "from your side", "by you", "generate it for me", or "write one for me"), fill the TYPE value with a natural message rather than clarifying.
   - The first item in the plan should be the first action to execute, the second item the next, and so on.
   - For compound requests like "click the cart button then go to payment" or "open the menu and then select settings", produce a plan with multiple actions in the correct order.
   - Each plan entry should be a normal action object with the same fields as the single-action schema.
@@ -362,6 +364,33 @@ function extractPressedKey(transcript) {
   return "Enter";
 }
 
+function isGenericTypedValue(value) {
+  const normalizedValue = normalizeText(value);
+  return (
+    !normalizedValue ||
+    /^(?:a|an|the|some|this|that|it)?\s*(?:message|text|value|content|thing|entry|data)$/i.test(
+      normalizedValue,
+    )
+  );
+}
+
+function hasExplicitTypedValue(transcript) {
+  const quotedMatch = transcript.match(
+    /(?:type|enter|fill|write)[^\n]*?["']([^"']+)["']/i,
+  );
+  if (quotedMatch?.[1]) return !isGenericTypedValue(quotedMatch[1]);
+
+  const emailMatch = transcript.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  if (emailMatch?.[0]) return true;
+
+  const trailingMatch = transcript.match(
+    /(?:as|with|for|into)\s+([a-z0-9\s@._-]+)/i,
+  );
+  if (trailingMatch?.[1]) return !isGenericTypedValue(trailingMatch[1]);
+
+  return false;
+}
+
 function extractTypedValue(transcript) {
   const quotedMatch = transcript.match(
     /(?:type|enter|fill|write)[^\n]*?["']([^"']+)["']/i,
@@ -371,12 +400,100 @@ function extractTypedValue(transcript) {
   const emailMatch = transcript.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
   if (emailMatch?.[0]) return emailMatch[0];
 
+  const fromYourEnd = /from your (end|side)|by you|from you/i.test(transcript);
+  const isMessageIntent = /message|feedback|comment|review|note/i.test(
+    transcript,
+  );
+  if (fromYourEnd && isMessageIntent) {
+    return "Great work on your website.";
+  }
+
   const trailingMatch = transcript.match(
     /(?:as|with|for|into)\s+([a-z0-9\s@._-]+)/i,
   );
-  if (trailingMatch?.[1]) return trailingMatch[1].trim();
+  if (trailingMatch?.[1] && !isGenericTypedValue(trailingMatch[1])) {
+    return trailingMatch[1].trim();
+  }
 
   return "hello@example.com";
+}
+
+function buildMissingValueClarification(transcript, elements = []) {
+  const normalizedTranscript = normalizeText(transcript);
+  const likelyFeedbackTask =
+    /message|feedback|comment|review|note|suggestion/i.test(
+      normalizedTranscript,
+    );
+  const likelyContactTask = /name|email|phone|address|password/i.test(
+    normalizedTranscript,
+  );
+  const hasTextField = (elements || []).some(
+    (entry) => entry?.element === "textarea" || entry?.element === "input",
+  );
+
+  if (
+    likelyFeedbackTask ||
+    (hasTextField && /message|feedback|review/i.test(normalizedTranscript))
+  ) {
+    return {
+      action: "CLARIFY",
+      target: null,
+      value: null,
+      message:
+        "Please say your message, or I can generate that message for you.",
+      direction: null,
+      amount: null,
+      scrollRequired: false,
+      confidence: 0.92,
+      reasoning: "Missing message content for a text entry task.",
+      ttsContext:
+        "Please say your message, or I can generate that message for you.",
+      clarifyOptions: [
+        { label: "Generate a message for me", value: "generate_message" },
+        { label: "Tell me the exact message", value: "provide_message" },
+      ],
+    };
+  }
+
+  if (likelyContactTask) {
+    return {
+      action: "CLARIFY",
+      target: null,
+      value: null,
+      message:
+        "Please tell me the value you want to enter, or I can help fill it for you.",
+      direction: null,
+      amount: null,
+      scrollRequired: false,
+      confidence: 0.9,
+      reasoning: "Missing input value for a form field.",
+      ttsContext:
+        "Please tell me the value you want to enter, or I can help fill it for you.",
+      clarifyOptions: [
+        { label: "Help me fill it", value: "help_fill" },
+        { label: "Tell me the exact value", value: "provide_value" },
+      ],
+    };
+  }
+
+  return {
+    action: "CLARIFY",
+    target: null,
+    value: null,
+    message:
+      "Please tell me the text you want to enter, or I can help generate it for you.",
+    direction: null,
+    amount: null,
+    scrollRequired: false,
+    confidence: 0.88,
+    reasoning: "Missing text content for a requested input action.",
+    ttsContext:
+      "Please tell me the text you want to enter, or I can help generate it for you.",
+    clarifyOptions: [
+      { label: "Generate the text for me", value: "generate_text" },
+      { label: "Tell me the exact text", value: "provide_text" },
+    ],
+  };
 }
 
 function matchesFieldHint(entry, transcript) {
@@ -459,11 +576,15 @@ function extractFallbackNavigationIntent(transcript) {
     return { action: "NAVIGATE", value: "/about" };
   }
 
-  if (/go back|back page|previous page/i.test(normalizedTranscript)) {
+  if (
+    /\bgo\s+back\b|\bback\s+page\b|\bprevious\s+page\b/i.test(
+      normalizedTranscript,
+    )
+  ) {
     return { action: "GO_BACK" };
   }
 
-  if (/go forward|next page/i.test(normalizedTranscript)) {
+  if (/\bgo\s+forward\b|\bnext\s+page\b/i.test(normalizedTranscript)) {
     return { action: "GO_FORWARD" };
   }
 
@@ -997,7 +1118,11 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
     };
   }
 
-  if (/go back|previous page|back page|back/i.test(normalizedTranscript)) {
+  if (
+    /\bgo\s+back\b|\bprevious\s+page\b|\bback\s+page\b|\bback\b/i.test(
+      normalizedTranscript,
+    )
+  ) {
     return {
       action: "GO_BACK",
       target: null,
@@ -1007,7 +1132,11 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
     };
   }
 
-  if (/go forward|next page|forward page|forward/i.test(normalizedTranscript)) {
+  if (
+    /\bgo\s+forward\b|\bnext\s+page\b|\bforward\s+page\b|\bforward\b/i.test(
+      normalizedTranscript,
+    )
+  ) {
     return {
       action: "GO_FORWARD",
       target: null,
@@ -1203,7 +1332,7 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
     (entry) => entry?.element === "select",
   );
   const isTypeAction =
-    /type|fill|write|enter|input|email|name|password/i.test(
+    /type|fill|write|enter|input|email|name|password|message|feedback/i.test(
       normalizedTranscript,
     ) &&
     Boolean(
@@ -1228,6 +1357,16 @@ export function buildRuleBasedActionPlan(transcript, elements, options = {}) {
   const isSummarizeAction = /summarize|summary|what is on this page/i.test(
     normalizedTranscript,
   );
+
+  const explicitValue = hasExplicitTypedValue(transcript);
+  const fromYourEnd = /from your (end|side)|by you|from you/i.test(transcript);
+  const isMessageIntent = /message|feedback|comment|review|note/i.test(
+    normalizedTranscript,
+  );
+
+  if (isTypeAction && !explicitValue && !fromYourEnd) {
+    return buildMissingValueClarification(transcript, elements);
+  }
 
   if (isTypeAction) {
     const resolvedInputTarget = inputTarget || bestMatch;
@@ -1428,6 +1567,123 @@ function buildFallbackActionPlan(transcript, elements, options = {}) {
   );
 }
 
+function resolveFormScrollTarget(
+  transcript,
+  elements = [],
+  targetAction = null,
+) {
+  const normalizedTranscript = normalizeText(transcript || "");
+  if (/feedback/i.test(normalizedTranscript)) return "feedback";
+  if (/contact/i.test(normalizedTranscript)) return "contact";
+  if (/about/i.test(normalizedTranscript)) return "about";
+
+  const targetElement = (elements || []).find(
+    (entry) => entry?.selector === targetAction?.target,
+  );
+  const contextHints = [
+    targetElement?.contextText,
+    targetElement?.text,
+    targetElement?.ariaLabel,
+    targetElement?.placeholder,
+    targetElement?.title,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const normalizedContext = normalizeText(contextHints);
+  if (/feedback/.test(normalizedContext)) return "feedback";
+  if (/contact/.test(normalizedContext)) return "contact";
+  if (/about/.test(normalizedContext)) return "about";
+
+  return "end";
+}
+
+function injectScrollBeforeOffscreenTyping(plan, transcript, elements = []) {
+  if (!plan || typeof plan !== "object") return plan;
+
+  const normalizedTranscript = normalizeText(transcript || "");
+  const hasFormIntent =
+    /fill|type|enter|input|email|message|feedback|form/i.test(
+      normalizedTranscript,
+    );
+  const hasScrollIntent = /scroll|down|below|lower|bottom|page/i.test(
+    normalizedTranscript,
+  );
+
+  const stepPlan =
+    Array.isArray(plan.plan) && plan.plan.length > 0 ? [...plan.plan] : [plan];
+  const targetAction =
+    stepPlan.find((entry) => entry?.action === "TYPE") || null;
+
+  if (!targetAction || !hasFormIntent) return plan;
+
+  const targetElement = (elements || []).find(
+    (entry) => entry?.selector === targetAction.target,
+  );
+  const position = targetElement?.position || {};
+  const isOffscreen =
+    (position.y || 0) > 1400 || (position.y || 0) + (position.height || 0) < 0;
+
+  if (!isOffscreen && !hasScrollIntent) return plan;
+
+  const typeIndex = stepPlan.findIndex((entry) => entry?.action === "TYPE");
+  const sectionTarget = resolveFormScrollTarget(
+    transcript,
+    elements,
+    targetAction,
+  );
+  if (typeIndex <= 0) {
+    stepPlan.splice(typeIndex >= 0 ? typeIndex : 0, 0, {
+      action: "SCROLL",
+      value: sectionTarget,
+      direction: null,
+      amount: null,
+      scrollRequired: false,
+      confidence: 0.95,
+      reasoning: `Scrolled to the ${sectionTarget} section before typing.`,
+      ttsContext: `Scrolling to the ${sectionTarget} section.`,
+    });
+  }
+
+  if (plan.action === "TYPE" && stepPlan[0]?.action === "SCROLL") {
+    return {
+      ...plan,
+      action: "SCROLL",
+      target: null,
+      value: sectionTarget,
+      plan: stepPlan,
+    };
+  }
+
+  if (plan.action === "TYPE" && stepPlan[0]?.action === "TYPE") {
+    return {
+      ...plan,
+      action: "SCROLL",
+      target: null,
+      value: sectionTarget,
+      plan: [
+        {
+          action: "SCROLL",
+          value: sectionTarget,
+          direction: null,
+          amount: null,
+          scrollRequired: false,
+          confidence: 0.95,
+          reasoning: `Scrolled to the ${sectionTarget} section before typing.`,
+          ttsContext: `Scrolling to the ${sectionTarget} section.`,
+        },
+        { ...plan, action: "TYPE" },
+      ],
+    };
+  }
+
+  return {
+    ...plan,
+    action: stepPlan[0]?.action || plan.action,
+    plan: stepPlan,
+  };
+}
+
 export async function buildActionPlan(transcript, elements, options = {}) {
   const normalizedTranscript = normalizeText(transcript);
   const commandKeywords = getCommandKeywords(normalizedTranscript);
@@ -1536,9 +1792,14 @@ export async function buildActionPlan(transcript, elements, options = {}) {
         elements,
         options,
       );
+      const plannedFallback = injectScrollBeforeOffscreenTyping(
+        fallbackPlan,
+        transcript,
+        elements,
+      );
       const ttsContext = await generateTtsContext(
         transcript,
-        fallbackPlan,
+        plannedFallback,
         elements,
         llmOptions,
       );
@@ -1546,7 +1807,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
         "[planner][plan] falling back to deterministic planning after invalid LLM output:",
         parseError.message,
       );
-      return { ...fallbackPlan, ttsContext };
+      return { ...plannedFallback, ttsContext };
     }
 
     console.log(
@@ -1554,18 +1815,23 @@ export async function buildActionPlan(transcript, elements, options = {}) {
       JSON.stringify(parsedActionPlan).slice(0, 1024),
     );
     const normalizedActionPlan = normalizeActionPlan(parsedActionPlan);
+    const plannedAction = injectScrollBeforeOffscreenTyping(
+      normalizedActionPlan,
+      transcript,
+      elements,
+    );
     console.log(
       "[planner][normalized] action plan:",
-      JSON.stringify(normalizedActionPlan).slice(0, 1024),
+      JSON.stringify(plannedAction).slice(0, 1024),
     );
     const ttsContext = await generateTtsContext(
       transcript,
-      normalizedActionPlan,
+      plannedAction,
       elements,
       llmOptions,
     );
     return {
-      ...normalizedActionPlan,
+      ...plannedAction,
       ttsContext,
     };
   } catch (error) {
@@ -1579,9 +1845,14 @@ export async function buildActionPlan(transcript, elements, options = {}) {
         elements,
         options,
       );
+      const plannedFallback = injectScrollBeforeOffscreenTyping(
+        fallbackPlan,
+        transcript,
+        elements,
+      );
       const ttsContext = await generateTtsContext(
         transcript,
-        fallbackPlan,
+        plannedFallback,
         elements,
         llmOptions,
       );
@@ -1589,7 +1860,7 @@ export async function buildActionPlan(transcript, elements, options = {}) {
         "[planner][plan] falling back to deterministic planning after LLM failure:",
         error.message,
       );
-      return { ...fallbackPlan, ttsContext };
+      return { ...plannedFallback, ttsContext };
     }
 
     console.error("[llm] planning failed:", error.message);

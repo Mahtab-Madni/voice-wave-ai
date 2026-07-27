@@ -1253,30 +1253,58 @@
 
     if (!normalizedLabel) return null;
 
-    const idCandidate = `#${normalizedLabel.replace(/\s+/g, "-")}`;
-    if (document.querySelector(idCandidate)) {
-      return document.querySelector(idCandidate);
+    const labelVariants = [
+      normalizedLabel,
+      normalizedLabel.replace(/\s+/g, "-"),
+      normalizedLabel.replace(/\s+/g, ""),
+    ];
+
+    for (const variant of labelVariants) {
+      const idCandidate = `#${variant}`;
+      const directMatch = document.querySelector(idCandidate);
+      if (directMatch) return directMatch;
+
+      const attributeMatch = document.querySelector(
+        `[id*="${variant}"],[aria-label*="${variant}"],[title*="${variant}"],[placeholder*="${variant}"]`,
+      );
+      if (attributeMatch) return attributeMatch;
     }
 
     const sectionCandidates = document.querySelectorAll(
-      'section, article, div, main, aside, [role="region"]',
+      'section, article, form, main, aside, div, [role="region"], [role="heading"], h1, h2, h3, h4, h5, h6, a, button, input, textarea, select, label',
     );
+
+    const scoredCandidates = [];
 
     for (const element of sectionCandidates) {
       const text = getVisibleTextFromElement(element).toLowerCase();
-      if (text.includes(normalizedLabel)) {
-        return element;
+      if (!text) continue;
+
+      let score = 0;
+      if (text.includes(normalizedLabel)) score += 100;
+
+      const labelTokens = normalizedLabel.split(/\s+/).filter(Boolean);
+      const tokenMatches = labelTokens.filter((token) => text.includes(token));
+      if (tokenMatches.length > 0) {
+        score += 20 + tokenMatches.length * 10;
+      }
+
+      if (score > 0) {
+        scoredCandidates.push({ element, score });
       }
     }
 
-    const headingCandidates = document.querySelectorAll(
-      'h1, h2, h3, h4, h5, h6, [role="heading"]',
-    );
-
-    for (const element of headingCandidates) {
-      const text = getVisibleTextFromElement(element).toLowerCase();
-      if (text.includes(normalizedLabel)) {
-        return element;
+    if (scoredCandidates.length > 0) {
+      scoredCandidates.sort((a, b) => b.score - a.score);
+      const bestMatch = scoredCandidates[0]?.element;
+      if (bestMatch) {
+        if (["INPUT", "TEXTAREA", "SELECT"].includes(bestMatch.tagName)) {
+          return (
+            bestMatch.closest("section, article, form, main, aside, div") ||
+            bestMatch
+          );
+        }
+        return bestMatch;
       }
     }
 
@@ -1561,6 +1589,74 @@
     return [];
   }
 
+  function getPendingActionStorageKey() {
+    return "__voice_widget_pending_actions__";
+  }
+
+  function persistPendingQueuedActions(queuedActions) {
+    if (!window.sessionStorage) return;
+
+    try {
+      if (!Array.isArray(queuedActions) || queuedActions.length === 0) {
+        window.sessionStorage.removeItem(getPendingActionStorageKey());
+        return;
+      }
+
+      window.sessionStorage.setItem(
+        getPendingActionStorageKey(),
+        JSON.stringify(queuedActions),
+      );
+    } catch (error) {
+      console.warn("[voice-widget] could not persist pending actions", error);
+    }
+  }
+
+  function restorePendingQueuedActions() {
+    if (!window.sessionStorage) return null;
+
+    try {
+      const rawValue = window.sessionStorage.getItem(
+        getPendingActionStorageKey(),
+      );
+      if (!rawValue) return null;
+
+      const parsedValue = JSON.parse(rawValue);
+      if (Array.isArray(parsedValue)) {
+        return parsedValue.filter(Boolean);
+      }
+      if (Array.isArray(parsedValue?.plan)) {
+        return parsedValue.plan.filter(Boolean);
+      }
+      return null;
+    } catch (error) {
+      console.warn("[voice-widget] could not restore pending actions", error);
+      return null;
+    }
+  }
+
+  function clearPendingQueuedActions() {
+    if (!window.sessionStorage) return;
+    try {
+      window.sessionStorage.removeItem(getPendingActionStorageKey());
+    } catch (error) {
+      console.warn("[voice-widget] could not clear pending actions", error);
+    }
+  }
+
+  function resumePendingQueuedActions() {
+    const queuedActions = restorePendingQueuedActions();
+    if (!Array.isArray(queuedActions) || queuedActions.length === 0) {
+      return false;
+    }
+
+    clearPendingQueuedActions();
+    void runQueuedActionPlan({
+      action: queuedActions[0]?.action || "NONE",
+      plan: queuedActions,
+    });
+    return true;
+  }
+
   async function runQueuedActionPlan(actionPlan) {
     const queuedActions = normalizeQueuedActions(actionPlan);
     if (queuedActions.length === 0) return;
@@ -1575,6 +1671,10 @@
         const nextAction = scriptState.queuedActions.shift();
         if (!nextAction || !nextAction.action || nextAction.action === "NONE") {
           continue;
+        }
+
+        if (nextAction.action === "NAVIGATE") {
+          persistPendingQueuedActions(scriptState.queuedActions);
         }
 
         if (nextAction.action === "RESPOND") {
@@ -1942,7 +2042,7 @@
     }
 
     if (actionPlan.action === "SCROLL") {
-      const target = actionPlan.value;
+      const target = actionPlan.value ?? actionPlan.target ?? null;
 
       if (target === "end") {
         window.scrollTo({
@@ -3032,14 +3132,27 @@
     startListening();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => {
-      createOverlay();
-      setStatus("Ready");
-    });
-  } else {
+  function bootstrapWidget() {
     createOverlay();
     setStatus("Ready");
+
+    window.setTimeout(() => {
+      void resumePendingQueuedActions();
+    }, 800);
+  }
+
+  window.addEventListener("pageshow", () => {
+    window.setTimeout(() => {
+      void resumePendingQueuedActions();
+    }, 400);
+  });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      bootstrapWidget();
+    });
+  } else {
+    bootstrapWidget();
   }
 
   window.__VOICE_WIDGET__ = {

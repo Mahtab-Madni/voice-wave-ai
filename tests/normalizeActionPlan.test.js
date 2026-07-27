@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildActionPlan,
+  buildRuleBasedActionPlan,
   generateTtsContext,
   normalizeActionPlan,
 } from "../server/voice/planner.js";
@@ -223,4 +224,88 @@ test("generateTtsContext uses conversational fallback phrasing for visible actio
 
   assert.match(fallback, /clicking/i);
   assert.doesNotMatch(fallback, /i['’]m|i['’]ll/i);
+});
+
+test("buildActionPlan inserts a scroll before off-screen form typing", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    text: async () =>
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                action: "TYPE",
+                target: "#feedback-email",
+                value: "alex@gmail.com",
+                scrollRequired: true,
+              }),
+            },
+          },
+        ],
+      }),
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            content: "ok",
+          },
+        },
+      ],
+    }),
+  });
+
+  try {
+    const plan = await buildActionPlan(
+      "go to about us page and fill the feedback form with email alex@gmail.com",
+      [
+        {
+          selector: "#feedback-email",
+          element: "input",
+          position: { y: 1800, height: 40 },
+        },
+      ],
+      { groqApiKey: "test-key", ttsApiKey: "tts-key" },
+    );
+
+    assert.equal(plan.plan?.[0]?.action, "SCROLL");
+    assert.equal(plan.plan?.[0]?.value, "feedback");
+    assert.equal(plan.plan?.[1]?.action, "TYPE");
+    assert.equal(plan.plan?.[1]?.target, "#feedback-email");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("buildRuleBasedActionPlan generates a feedback message when the user asks for one from the assistant", () => {
+  const plan = buildRuleBasedActionPlan(
+    "fill the feedback form with a message from your end",
+    [
+      {
+        selector: "#feedback-message",
+        element: "textarea",
+        position: { y: 1800, height: 60 },
+      },
+    ],
+  );
+
+  assert.equal(plan.action, "TYPE");
+  assert.match(plan.value, /great work|website/i);
+});
+
+test("buildRuleBasedActionPlan clarifies when a text value was not provided", () => {
+  const plan = buildRuleBasedActionPlan(
+    "fill the feedback form with a message",
+    [
+      {
+        selector: "#feedback-message",
+        element: "textarea",
+        position: { y: 1800, height: 60 },
+      },
+    ],
+  );
+
+  assert.equal(plan.action, "CLARIFY");
+  assert.match(plan.message, /say your message|generate that message/i);
 });
