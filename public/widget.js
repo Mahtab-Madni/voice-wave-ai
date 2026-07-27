@@ -2703,7 +2703,7 @@
           scriptState.listening = false;
           setListeningState(false);
           void speakReply(
-            "Sorry, I didn't catch that. Click the mic to try again.",
+            "Sorry, I didn't listen any speech. Click the mic to try again.",
           );
           setFeedback("Speech recognition failed. Click the mic to try again.");
         }
