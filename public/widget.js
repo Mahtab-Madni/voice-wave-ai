@@ -1113,8 +1113,12 @@
     if (overlay) overlay.classList.remove("is-hidden");
   }
 
+  function shouldSpeakStopFarewell(options = {}) {
+    return Boolean(options?.speakFarewell);
+  }
+
   function collapseWidget() {
-    stopListening();
+    stopListening({ speakFarewell: false });
     scriptState.isExpanded = false;
     const trigger = document.getElementById(triggerId);
     const overlay = getOverlay();
@@ -1682,7 +1686,7 @@
     const totalSteps = queuedActions.length;
 
     if (totalSteps > 1) {
-      return "Your task is complete.I am listening for your next command.";
+      return "Your task is complete. I am listening for your next command.";
     }
 
     return "";
@@ -3329,7 +3333,7 @@
       });
   }
 
-  function stopListening() {
+  function stopListening(options = {}) {
     scriptState.listening = false;
     scriptState.sessionActive = false;
     scriptState.userInitiatedStop = true;
@@ -3371,12 +3375,14 @@
 
     setStatus("Stopped");
     setFeedback("Stopped listening.");
-    void speakReply("Thanks for using. Click mic to start listening again.");
+    if (shouldSpeakStopFarewell(options)) {
+      void speakReply("Thanks for using. Click mic to start listening again.");
+    }
   }
 
   function toggleListening() {
     if (scriptState.listening) {
-      stopListening();
+      stopListening({ speakFarewell: true });
       return;
     }
     startListening();

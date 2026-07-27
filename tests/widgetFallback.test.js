@@ -243,7 +243,10 @@ test("buildQueuedPlanCompletionMessage returns a completion message for multi-st
     [],
   );
 
-  assert.equal(message, "Your task is complete.");
+  assert.equal(
+    message,
+    "Your task is complete. I am listening for your next command.",
+  );
 });
 
 test("buildQueuedPlanCompletionMessage stays silent for single-step plans", () => {
@@ -295,6 +298,24 @@ test("buildQueuedPlanCompletionMessage stays silent for single-step plans", () =
   );
 
   assert.equal(message, "");
+});
+
+test("shouldSpeakStopFarewell returns false for close actions", () => {
+  const helperMatch = widgetSource.match(
+    /function shouldSpeakStopFarewell\(options = \{\}\)\s*\{([\s\S]*?)\}/,
+  );
+  assert.ok(helperMatch, "expected shouldSpeakStopFarewell to be present");
+
+  const functionSource = helperMatch[0];
+  const context = { console: { debug() {}, warn() {} } };
+  vm.createContext(context);
+  vm.runInContext(functionSource, context);
+
+  assert.equal(
+    context.shouldSpeakStopFarewell({ speakFarewell: false }),
+    false,
+  );
+  assert.equal(context.shouldSpeakStopFarewell({ speakFarewell: true }), true);
 });
 
 test("shouldResumeListeningAfterQueuedActions stays false when a navigation pause still has queued work", () => {
