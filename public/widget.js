@@ -1677,24 +1677,15 @@
     );
   }
 
-  function buildQueuedPlanCompletionMessage(actionPlan, completedActions = []) {
+  function buildQueuedPlanCompletionMessage(actionPlan) {
     const queuedActions = normalizeQueuedActions(actionPlan);
-    const completedCount = Array.isArray(completedActions)
-      ? completedActions.length
-      : 0;
     const totalSteps = queuedActions.length;
 
     if (totalSteps > 1) {
-      return completedCount > 0
-        ? "Your task is complete."
-        : "Your task is complete.";
+      return "Your task is complete.I am listening for your next command.";
     }
 
-    if (completedCount > 0) {
-      return "Your task is complete.";
-    }
-
-    return "Your task is complete.";
+    return "";
   }
 
   function clearQueuedNavigationResumeTimer() {
@@ -1820,10 +1811,7 @@
 
       if (!scriptState.pendingClarify && !pausedForNavigation) {
         clearPendingQueuedActions();
-        const completionMessage = buildQueuedPlanCompletionMessage(
-          actionPlan,
-          [],
-        );
+        const completionMessage = buildQueuedPlanCompletionMessage(actionPlan);
         if (completionMessage) {
           setFeedback(completionMessage, actionPlan);
           void speakReply(completionMessage);
