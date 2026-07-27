@@ -650,6 +650,7 @@
     queuedActions: [],
     executingQueuedActions: false,
     awaitingQueuedNavigationResume: false,
+    queuedNavigationResumeTimer: null,
   };
 
   const overlayId = "voice-widget-overlay";
@@ -1669,18 +1670,49 @@
     awaitingQueuedNavigationResume,
   ) {
     return Boolean(
-      isProcessing && !pendingClarify && !pausedForNavigation && !awaitingQueuedNavigationResume,
+      isProcessing &&
+      !pendingClarify &&
+      !pausedForNavigation &&
+      !awaitingQueuedNavigationResume,
     );
+  }
+
+  function clearQueuedNavigationResumeTimer() {
+    if (scriptState.queuedNavigationResumeTimer) {
+      window.clearTimeout(scriptState.queuedNavigationResumeTimer);
+      scriptState.queuedNavigationResumeTimer = null;
+    }
+  }
+
+  function prepareQueuedNavigationResume(delayMs = 900) {
+    if (!restorePendingQueuedActions()) {
+      scriptState.awaitingQueuedNavigationResume = false;
+      clearQueuedNavigationResumeTimer();
+      return false;
+    }
+
+    scriptState.awaitingQueuedNavigationResume = true;
+    clearQueuedNavigationResumeTimer();
+    scriptState.queuedNavigationResumeTimer = window.setTimeout(() => {
+      scriptState.queuedNavigationResumeTimer = null;
+      if (scriptState.awaitingQueuedNavigationResume) {
+        void resumePendingQueuedActions();
+      }
+    }, delayMs);
+    return true;
   }
 
   function resumePendingQueuedActions() {
     const queuedActions = restorePendingQueuedActions();
     if (!Array.isArray(queuedActions) || queuedActions.length === 0) {
+      clearQueuedNavigationResumeTimer();
+      scriptState.awaitingQueuedNavigationResume = false;
       return false;
     }
 
     console.debug("[voice-widget] resuming queued actions", queuedActions);
     clearPendingQueuedActions();
+    clearQueuedNavigationResumeTimer();
     scriptState.awaitingQueuedNavigationResume = false;
     void runQueuedActionPlan({
       action: queuedActions[0]?.action || "NONE",
@@ -1718,6 +1750,7 @@
           persistPendingQueuedActions(scriptState.queuedActions);
           pausedForNavigation = true;
           scriptState.awaitingQueuedNavigationResume = true;
+          prepareQueuedNavigationResume(1000);
           break;
         }
 
@@ -1759,6 +1792,10 @@
       scriptState.queuedActions = [];
       if (!scriptState.pendingClarify && !pausedForNavigation) {
         clearPendingQueuedActions();
+      }
+      if (!pausedForNavigation) {
+        scriptState.awaitingQueuedNavigationResume = false;
+        clearQueuedNavigationResumeTimer();
       }
       if (
         shouldResumeListeningAfterQueuedActions(
@@ -3329,13 +3366,13 @@
     setStatus("Ready");
 
     window.setTimeout(() => {
-      void resumePendingQueuedActions();
+      prepareQueuedNavigationResume(800);
     }, 800);
   }
 
   window.addEventListener("pageshow", () => {
     window.setTimeout(() => {
-      void resumePendingQueuedActions();
+      prepareQueuedNavigationResume(600);
     }, 400);
   });
 

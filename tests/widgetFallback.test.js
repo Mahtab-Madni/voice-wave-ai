@@ -136,11 +136,74 @@ test("findFallbackActionTarget uses a visible input fallback for TYPE actions", 
   assert.equal(target, candidates[1]);
 });
 
+test("prepareQueuedNavigationResume arms the resume path for stored queued actions", () => {
+  const helperStart = widgetSource.indexOf(
+    "function prepareQueuedNavigationResume",
+  );
+  assert.notEqual(
+    helperStart,
+    -1,
+    "expected prepareQueuedNavigationResume to be present",
+  );
+
+  const braceStart = widgetSource.indexOf("{", helperStart);
+  let depth = 0;
+  let end = -1;
+
+  for (let index = braceStart; index < widgetSource.length; index += 1) {
+    const char = widgetSource[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = index;
+        break;
+      }
+    }
+  }
+
+  assert.notEqual(
+    end,
+    -1,
+    "expected prepareQueuedNavigationResume body to end",
+  );
+  const functionSource = widgetSource.slice(helperStart, end + 1);
+
+  const scheduled = [];
+  const context = {
+    console: { debug() {}, warn() {} },
+    window: {
+      setTimeout(callback) {
+        scheduled.push(callback);
+        return 1;
+      },
+      clearTimeout() {},
+    },
+    scriptState: { awaitingQueuedNavigationResume: false },
+    restorePendingQueuedActions() {
+      return [{ action: "CLICK" }];
+    },
+    clearQueuedNavigationResumeTimer() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(functionSource, context);
+
+  context.prepareQueuedNavigationResume(400);
+
+  assert.equal(context.scriptState.awaitingQueuedNavigationResume, true);
+  assert.equal(scheduled.length, 1);
+});
+
 test("shouldResumeListeningAfterQueuedActions stays false when a navigation pause still has queued work", () => {
   const helperStart = widgetSource.indexOf(
     "function shouldResumeListeningAfterQueuedActions",
   );
-  assert.notEqual(helperStart, -1, "expected queue-resume helper to be present");
+  assert.notEqual(
+    helperStart,
+    -1,
+    "expected queue-resume helper to be present",
+  );
 
   const braceStart = widgetSource.indexOf("{", helperStart);
   let depth = 0;
