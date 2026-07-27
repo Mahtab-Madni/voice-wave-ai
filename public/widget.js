@@ -1677,6 +1677,26 @@
     );
   }
 
+  function buildQueuedPlanCompletionMessage(actionPlan, completedActions = []) {
+    const queuedActions = normalizeQueuedActions(actionPlan);
+    const completedCount = Array.isArray(completedActions)
+      ? completedActions.length
+      : 0;
+    const totalSteps = queuedActions.length;
+
+    if (totalSteps > 1) {
+      return completedCount > 0
+        ? "Your task is complete."
+        : "Your task is complete.";
+    }
+
+    if (completedCount > 0) {
+      return "Your task is complete.";
+    }
+
+    return "Your task is complete.";
+  }
+
   function clearQueuedNavigationResumeTimer() {
     if (scriptState.queuedNavigationResumeTimer) {
       window.clearTimeout(scriptState.queuedNavigationResumeTimer);
@@ -1797,6 +1817,19 @@
         scriptState.awaitingQueuedNavigationResume = false;
         clearQueuedNavigationResumeTimer();
       }
+
+      if (!scriptState.pendingClarify && !pausedForNavigation) {
+        clearPendingQueuedActions();
+        const completionMessage = buildQueuedPlanCompletionMessage(
+          actionPlan,
+          [],
+        );
+        if (completionMessage) {
+          setFeedback(completionMessage, actionPlan);
+          void speakReply(completionMessage);
+        }
+      }
+
       if (
         shouldResumeListeningAfterQueuedActions(
           scriptState.processing,

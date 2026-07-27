@@ -195,6 +195,57 @@ test("prepareQueuedNavigationResume arms the resume path for stored queued actio
   assert.equal(scheduled.length, 1);
 });
 
+test("buildQueuedPlanCompletionMessage returns a completion message for multi-step plans", () => {
+  const helperStart = widgetSource.indexOf(
+    "function buildQueuedPlanCompletionMessage",
+  );
+  assert.notEqual(
+    helperStart,
+    -1,
+    "expected buildQueuedPlanCompletionMessage to be present",
+  );
+
+  const braceStart = widgetSource.indexOf("{", helperStart);
+  let depth = 0;
+  let end = -1;
+
+  for (let index = braceStart; index < widgetSource.length; index += 1) {
+    const char = widgetSource[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = index;
+        break;
+      }
+    }
+  }
+
+  assert.notEqual(end, -1, "expected completion-message helper body to end");
+  const functionSource = widgetSource.slice(helperStart, end + 1);
+
+  const context = {
+    console: { debug() {}, warn() {} },
+    normalizeQueuedActions(actionPlan) {
+      const plan = actionPlan?.plan || actionPlan?.actions || actionPlan?.steps;
+      if (Array.isArray(plan)) return plan.filter(Boolean);
+      if (actionPlan?.action && actionPlan.action !== "NONE")
+        return [actionPlan];
+      return [];
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(functionSource, context);
+
+  const message = context.buildQueuedPlanCompletionMessage(
+    { plan: [{ action: "CLICK" }, { action: "TYPE" }] },
+    [],
+  );
+
+  assert.equal(message, "The requested task is complete.");
+});
+
 test("shouldResumeListeningAfterQueuedActions stays false when a navigation pause still has queued work", () => {
   const helperStart = widgetSource.indexOf(
     "function shouldResumeListeningAfterQueuedActions",
