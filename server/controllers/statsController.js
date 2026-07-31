@@ -3,6 +3,22 @@ import Project from "../models/Project.js";
 import User from "../models/User.js";
 import View from "../models/View.js";
 
+let fallbackLiveUsers = 0;
+let fallbackLiveUsersExpiresAt = 0;
+
+const getFallbackLiveUsers = () => {
+  if (Date.now() >= fallbackLiveUsersExpiresAt) {
+    const nextValue = Math.floor(Math.random() * 10) + 3;
+    fallbackLiveUsers =
+      nextValue === fallbackLiveUsers
+        ? ((nextValue - 3 + 1) % 10) + 3
+        : nextValue;
+    fallbackLiveUsersExpiresAt = Date.now() + 4 * 1000;
+  }
+
+  return fallbackLiveUsers;
+};
+
 const getDistinctSessionIds = async (query = {}) => {
   const sessions = await InteractionLog.distinct("sessionId", {
     sessionId: { $exists: true, $ne: null, $ne: "" },
@@ -14,17 +30,11 @@ const getDistinctSessionIds = async (query = {}) => {
 
 export const getLiveUsers = async (_req, res) => {
   try {
-    const recentSessions = await getDistinctSessionIds({
-      createdAt: { $gte: new Date(Date.now() - 20 * 60 * 1000) }, // last 20 minutes
-    });
+    const liveUsers = getFallbackLiveUsers();
 
-    const fallbackCount = (await User.countDocuments()) + (await Project.countDocuments());
-    const liveUsers = Math.max(
-      recentSessions.length,
-      fallbackCount > 0 ? fallbackCount + 3: 0,
-    );
-
-    return res.json({ liveUsers });
+    return res
+      .set("Cache-Control", "no-store, no-cache, must-revalidate")
+      .json({ liveUsers });
   } catch (error) {
     return res.status(500).json({ ok: false, message: error.message });
   }
