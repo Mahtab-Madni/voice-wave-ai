@@ -13,7 +13,7 @@ const getFallbackLiveUsers = () => {
       nextValue === fallbackLiveUsers
         ? ((nextValue - 3 + 1) % 10) + 3
         : nextValue;
-    fallbackLiveUsersExpiresAt = Date.now() + 4 * 1000;
+    fallbackLiveUsersExpiresAt = Date.now() + 10 * 1000;
   }
 
   return fallbackLiveUsers;
