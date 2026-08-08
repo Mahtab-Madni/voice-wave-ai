@@ -8,13 +8,13 @@
         this.maxPreviewChars = options.maxPreviewChars || 80;
       }
 
-      normalizeText(value) {
+      normalizeText(value) { // normalize whitespace and trim
         return String(value || "")
           .replace(/\s+/g, " ")
           .trim();
       }
 
-      truncateText(value, maxLength = this.maxTextLength) {
+      truncateText(value, maxLength = this.maxTextLength) { // truncate text to maxLength and append ellipsis if needed
         const text = this.normalizeText(value);
         if (!text) return "";
         return text.length > maxLength
@@ -22,7 +22,7 @@
           : text;
       }
 
-      shortenSelector(selector, id) {
+      shortenSelector(selector, id) { // shorten a CSS selector to a more concise form, prioritizing ID and data attributes
         if (!selector) return null;
         if (id) return `#${id}`;
 
@@ -49,7 +49,7 @@
         return normalizedSelector;
       }
 
-      minimizePosition(position) {
+      minimizePosition(position) { // minimize position object to reduce payload size
         if (!position) return undefined;
         return {
           x: Math.round(position.x || 0),
@@ -59,7 +59,7 @@
         };
       }
 
-      getParentContextText(selector) {
+      getParentContextText(selector) { //get the text content of the closest parent container for context, limited to 40 characters
         if (typeof document === "undefined" || !selector) return "";
         try {
           const el = document.querySelector(selector);
@@ -82,7 +82,7 @@
         return "";
       }
 
-      prepareContext(elements = [], options = {}) {
+      prepareContext(elements = [], options = {}) { // prepare a safe and optimized context payload for transmission, filtering and truncating as needed
         const context = Array.isArray(elements) ? elements : [];
         const safeElements = context
           .filter((entry) => {
@@ -161,7 +161,7 @@
         this.handler = options.handler || null;
       }
 
-      collectContext() {
+      collectContext() { // collect interactive elements from the DOM and return a structured representation of them, including their text, selector, role, and position
         const elements = [];
         const candidates = document.querySelectorAll(
           "a, button, input, select, textarea, summary, [role], [onclick]",
@@ -208,7 +208,7 @@
         return Array.isArray(payload) ? payload : elements;
       }
 
-      collectStructuredData() {
+      collectStructuredData() { // collect structured data from the DOM and return a organized representation
         const structured = { tables: [], grids: [] };
 
         try {
